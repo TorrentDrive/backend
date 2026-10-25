@@ -40,10 +40,10 @@ jobs:
           dotnet-version: "9.0.x"
 
       - name: Restore
-        run: dotnet restore TorrenClou.sln
+        run: dotnet restore TorrentDrive.sln
 
       - name: Build
-        run: dotnet build TorrenClou.sln -c Release --no-restore
+        run: dotnet build TorrentDrive.sln -c Release --no-restore
 
       # Generated from the annotated option types rather than written by hand.
       # Running it on every build means a change to the configuration surface
@@ -51,7 +51,7 @@ jobs:
       - name: Export the configuration schema
         run: |
           set -euo pipefail
-          dotnet TorrenClou.API/bin/Release/net9.0/TorrenClou.API.dll --dump-config-schema > config-schema.json
+          dotnet TorrentDrive.API/bin/Release/net9.0/TorrentDrive.API.dll --dump-config-schema > config-schema.json
           entries=$(jq '.entries | length' config-schema.json)
           echo "Documented ${entries} configuration values."
           jq -e '.entries | length > 0' config-schema.json > /dev/null
@@ -77,20 +77,20 @@ jobs:
         service:
           - name: api
             context: .
-            dockerfile: TorrenClou.API/Dockerfile
+            dockerfile: TorrentDrive.API/Dockerfile
           - name: worker
             context: .
-            dockerfile: TorrenClou.Worker/Dockerfile
+            dockerfile: TorrentDrive.Worker/Dockerfile
           - name: gdrive-worker
             context: .
-            dockerfile: TorrenClou.GoogleDrive.Worker/Dockerfile
+            dockerfile: TorrentDrive.GoogleDrive.Worker/Dockerfile
           # s3-worker was missing from this matrix, so its image was never
-          # published even though TorrenClou.S3.Worker/Dockerfile has always
+          # published even though TorrentDrive.S3.Worker/Dockerfile has always
           # existed. Any deployment splitting the workers into separate
           # services had no image to pull.
           - name: s3-worker
             context: .
-            dockerfile: TorrenClou.S3.Worker/Dockerfile
+            dockerfile: TorrentDrive.S3.Worker/Dockerfile
 
     steps:
       - name: Checkout code
@@ -131,9 +131,9 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
-            org.opencontainers.image.title=TorrenClou ${{ matrix.service.name }}
-            org.opencontainers.image.description=TorrenClou ${{ matrix.service.name }} — self-hosted torrent-to-cloud
-            org.opencontainers.image.vendor=TorrenClou
+            org.opencontainers.image.title=TorrentDrive ${{ matrix.service.name }}
+            org.opencontainers.image.description=TorrentDrive ${{ matrix.service.name }} — self-hosted torrent-to-cloud
+            org.opencontainers.image.vendor=TorrentDrive
             org.opencontainers.image.licenses=MIT
             org.opencontainers.image.url=https://tc.gitnasr.com
             org.opencontainers.image.documentation=https://tc.gitnasr.com/docs
@@ -160,7 +160,7 @@ jobs:
   # failing every push to main with "Branch Not Match" (301) — a Dokploy-side
   # configuration mismatch that made a perfectly good build look broken.
   #
-  # TorrenClou is not tied to one host. It publishes images; Dokploy, Coolify,
+  # TorrentDrive is not tied to one host. It publishes images; Dokploy, Coolify,
   # Railway, Render or a plain docker host all pull them, and most of those
   # redeploy on their own. So this is now a hook for whoever wants one, named
   # after nothing in particular.
@@ -208,7 +208,7 @@ jobs:
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.DEPLOY_PAT }}
-          repository: TorrenClou/deploy
+          repository: TorrentDrive/deploy
           event-type: build-combined
           client-payload: |
             {
@@ -303,6 +303,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          dotnet build TorrenClou.sln -c Release
-          dotnet TorrenClou.API/bin/Release/net9.0/TorrenClou.API.dll --dump-config-schema > config-schema.json
+          dotnet build TorrentDrive.sln -c Release
+          dotnet TorrentDrive.API/bin/Release/net9.0/TorrentDrive.API.dll --dump-config-schema > config-schema.json
           gh release upload "v${{ steps.release.outputs.version }}" config-schema.json --clobber

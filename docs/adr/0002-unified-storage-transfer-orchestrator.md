@@ -1,0 +1,3 @@
+# Unified Storage Transfer Orchestrator and Destination Adapters
+
+All Upload Phase lifecycle concerns — distributed locking, background heartbeat and lock-renewal loops, status transitions, automatic Failover routing, file selection filtering, transfer metrics, and post-upload Staging Volume cleanup — live in a single StorageTransferOrchestrator rather than inside each worker's Hangfire job class. Provider-specific protocols (Google Drive resumable HTTP sessions and S3 multipart uploads) are isolated behind IStorageDestination adapters (GoogleDriveStorageDestination and S3StorageDestination), ensuring that operational guarantees like Failover and lock renewal behave identically across all Storage Providers.

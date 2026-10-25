@@ -2,18 +2,18 @@ services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: torrenclou_postgres
+    container_name: torrentdrive_postgres
     command: postgres -c max_connections=200
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-torrenclo}
-      POSTGRES_USER: ${POSTGRES_USER:-torrenclo_user}
+      POSTGRES_DB: ${POSTGRES_DB:-torrentdrive}
+      POSTGRES_USER: ${POSTGRES_USER:-torrentdrive_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
     ports:
       - "${POSTGRES_PORT:-47300}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-torrenclo_user} -d ${POSTGRES_DB:-torrenclo}" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-torrentdrive_user} -d ${POSTGRES_DB:-torrentdrive}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,7 +22,7 @@ services:
   # Redis Cache & Job State
   redis:
     image: redis:7-alpine
-    container_name: torrenclou_redis
+    container_name: torrentdrive_redis
     ports:
       - "${REDIS_PORT:-47400}:6379"
     volumes:
@@ -38,18 +38,18 @@ services:
   api:
     build:
       context: .
-      dockerfile: TorrenClou.API/Dockerfile
-    container_name: torrenclou_api
+      dockerfile: TorrentDrive.API/Dockerfile
+    container_name: torrentdrive_api
     ports:
       - "${API_PORT:-47200}:8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
-      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrenclo};Username=${POSTGRES_USER:-torrenclo_user};Password=${POSTGRES_PASSWORD:-changeme}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrentdrive};Username=${POSTGRES_USER:-torrentdrive_user};Password=${POSTGRES_PASSWORD:-changeme}
       - Redis__ConnectionString=redis:6379
       - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
       - Jwt__Key=${JWT_SECRET}
-      - Jwt__Issuer=${JWT_ISSUER:-TorrenClou_API}
-      - Jwt__Audience=${JWT_AUDIENCE:-TorrenClou_Client}
+      - Jwt__Issuer=${JWT_ISSUER:-TorrentDrive_API}
+      - Jwt__Audience=${JWT_AUDIENCE:-TorrentDrive_Client}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@gitnasr.com}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-P@ssword123!}
       - ADMIN_NAME=${ADMIN_NAME:-Admin}
@@ -84,11 +84,11 @@ services:
   torrent-worker:
     build:
       context: .
-      dockerfile: TorrenClou.Worker/Dockerfile
-    container_name: torrenclou_torrent_worker
+      dockerfile: TorrentDrive.Worker/Dockerfile
+    container_name: torrentdrive_torrent_worker
     environment:
       - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
-      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrenclo};Username=${POSTGRES_USER:-torrenclo_user};Password=${POSTGRES_PASSWORD:-changeme}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrentdrive};Username=${POSTGRES_USER:-torrentdrive_user};Password=${POSTGRES_PASSWORD:-changeme}
       - Redis__ConnectionString=redis:6379
       - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-10}
       - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
@@ -117,11 +117,11 @@ services:
   googledrive-worker:
     build:
       context: .
-      dockerfile: TorrenClou.GoogleDrive.Worker/Dockerfile
-    container_name: torrenclou_googledrive_worker
+      dockerfile: TorrentDrive.GoogleDrive.Worker/Dockerfile
+    container_name: torrentdrive_googledrive_worker
     environment:
       - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
-      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrenclo};Username=${POSTGRES_USER:-torrenclo_user};Password=${POSTGRES_PASSWORD:-changeme}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrentdrive};Username=${POSTGRES_USER:-torrentdrive_user};Password=${POSTGRES_PASSWORD:-changeme}
       - Redis__ConnectionString=redis:6379
       - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
       - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-10}
@@ -150,11 +150,11 @@ services:
   s3-worker:
     build:
       context: .
-      dockerfile: TorrenClou.S3.Worker/Dockerfile
-    container_name: torrenclou_s3_worker
+      dockerfile: TorrentDrive.S3.Worker/Dockerfile
+    container_name: torrentdrive_s3_worker
     environment:
       - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
-      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrenclo};Username=${POSTGRES_USER:-torrenclo_user};Password=${POSTGRES_PASSWORD:-changeme}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrentdrive};Username=${POSTGRES_USER:-torrentdrive_user};Password=${POSTGRES_PASSWORD:-changeme}
       - Redis__ConnectionString=redis:6379
       - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
       - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-10}
@@ -182,7 +182,7 @@ services:
   # Loki - Log aggregation
   loki:
     image: grafana/loki:2.9.3
-    container_name: torrenclou_loki
+    container_name: torrentdrive_loki
     ports:
       - "47700:3100"
     command: -config.file=/etc/loki/local-config.yaml
@@ -198,7 +198,7 @@ services:
   # Prometheus - Metrics collection
   prometheus:
     image: prom/prometheus:v2.48.1
-    container_name: torrenclou_prometheus
+    container_name: torrentdrive_prometheus
     ports:
       - "47600:9090"
     command:
@@ -217,7 +217,7 @@ services:
   # Grafana - Visualization dashboard
   grafana:
     image: grafana/grafana:10.2.3
-    container_name: torrenclou_grafana
+    container_name: torrentdrive_grafana
     ports:
       - "47500:3000"
     environment:

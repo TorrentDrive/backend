@@ -4,7 +4,7 @@
   "bootstrap-sha": "4f9d4b6cbcf0ef456fcc61790fcb910c3b21af89",
   "packages": {
     ".": {
-      "package-name": "torrenclou-backend",
+      "package-name": "torrentdrive-backend",
       "changelog-path": "CHANGELOG.md",
       "extra-files": ["Directory.Build.props"],
       "include-component-in-tag": false,

@@ -1,0 +1,3 @@
+# Separate Job Orchestration from Worker Execution Tracking
+
+User-facing Job orchestration (IJobService) and worker-side runtime telemetry (IJobExecutionTracker) are separated into distinct interfaces and implementations. IJobService handles API commands and queries (creating, retrying, force-starting, cancelling, and rerouting Jobs), while background workers depend only on IJobExecutionTracker to record StartedAt, transfer progress, byte rates, and heartbeats without pulling user-orchestration dependencies into worker scopes.

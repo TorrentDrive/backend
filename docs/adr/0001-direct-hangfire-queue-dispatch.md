@@ -1,0 +1,3 @@
+# Direct Hangfire Queue Dispatch for Worker Processes
+
+The API and worker processes (TorrentDrive.Worker, TorrentDrive.GoogleDrive.Worker, and TorrentDrive.S3.Worker) dispatch and consume Jobs directly through named Hangfire queues (	orrents, google-drive, and s3) backed by PostgreSQL, rather than publishing messages to Redis Streams and having a consumer loop immediately enqueue a Hangfire job. Using Redis Streams purely as a trampoline into Hangfire created a dual-queue gap where Jobs could be acknowledged on the stream before a Hangfire job ID was persisted, requiring an orphan reaper to reconcile lost state; dispatching directly to Hangfire gives every Job a tracked HangfireJobId or HangfireUploadJobId in a single atomic step.

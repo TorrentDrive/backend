@@ -10,9 +10,9 @@
             "request": "launch",
             "preLaunchTask": "build",
             // If you have changed target frameworks, make sure to update the program path.
-            "program": "${workspaceFolder}/TorrenClou.API/bin/Debug/net9.0/TorrenClou.API.dll",
+            "program": "${workspaceFolder}/TorrentDrive.API/bin/Debug/net9.0/TorrentDrive.API.dll",
             "args": [],
-            "cwd": "${workspaceFolder}/TorrenClou.API",
+            "cwd": "${workspaceFolder}/TorrentDrive.API",
             "stopAtEntry": false,
             // Enable launching a web browser when ASP.NET Core starts. For more information: https://aka.ms/VSCode-CS-LaunchJson-WebBrowser
             "serverReadyAction": {

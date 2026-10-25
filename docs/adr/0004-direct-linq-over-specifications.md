@@ -1,0 +1,4 @@
+# Direct LINQ Expressions on Generic Repository Over Specification Pattern
+
+IGenericRepository<T> accepts standard LINQ predicates (Expression<Func<T, bool>>), orderBy delegates, paging parameters (skip/	ake), and navigation includes directly, rather than wrapping queries in ISpecification<T> and BaseSpecification<T> classes. The Specification layer added ceremony without encapsulating domain rules (most callers constructed inline 
+ew BaseSpecification<T>(...) instances), while standard LINQ expressions keep TorrentDrive.Core and TorrentDrive.Application free of Entity Framework Core package references with far less indirection.

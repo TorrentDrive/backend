@@ -3,8 +3,8 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  # TorrenClou API - OpenTelemetry metrics endpoint
-  - job_name: 'torrenclou-api'
+  # TorrentDrive API - OpenTelemetry metrics endpoint
+  - job_name: 'torrentdrive-api'
     static_configs:
       - targets: ['api:8080']
     metrics_path: '/metrics'
