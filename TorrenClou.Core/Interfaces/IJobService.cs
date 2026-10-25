@@ -1,4 +1,4 @@
-using TorrenClou.Core.DTOs.Common;
+﻿using TorrenClou.Core.DTOs.Common;
 using TorrenClou.Core.DTOs.Jobs;
 using TorrenClou.Core.DTOs.Torrents;
 using TorrenClou.Core.Entities.Jobs;
@@ -62,10 +62,5 @@ namespace TorrenClou.Core.Interfaces
 
         Task CancelJobAsync(int jobId, int userId, UserRole? userRole = null);
 
-        // Worker-facing job state updates
-        Task UpdateJobStartedAtAsync(UserJob job);
-        /// <param name="bytesPerSecond">Current upload rate, surfaced in the UI. Pass 0 when unknown.</param>
-        Task UpdateJobProgressAsync(UserJob job, long bytesUploaded, double bytesPerSecond = 0);
-        Task UpdateHeartbeatAsync(int jobId);
     }
 }

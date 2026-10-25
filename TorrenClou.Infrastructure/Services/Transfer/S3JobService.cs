@@ -7,9 +7,8 @@ using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Enums;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
-namespace TorrenClou.S3.Worker.Services
+namespace TorrenClou.Infrastructure.Services.Transfer
 {
     /// <summary>
     /// Service for S3-specific job operations including credential verification, lock management, and upload progress tracking.
@@ -152,16 +151,14 @@ namespace TorrenClou.S3.Worker.Services
 
         public async Task<IReadOnlyList<S3SyncProgress>> GetInProgressUploadsAsync(int jobId)
         {
-            var spec = new BaseSpecification<S3SyncProgress>(
+            return await unitOfWork.Repository<S3SyncProgress>().ListAsync(
                 p => p.JobId == jobId && p.Status == S3UploadProgressStatus.InProgress);
-            return await unitOfWork.Repository<S3SyncProgress>().ListAsync(spec);
         }
 
         public async Task<S3SyncProgress?> GetUploadProgressAsync(int jobId, string s3Key)
         {
-            var spec = new BaseSpecification<S3SyncProgress>(
+            return await unitOfWork.Repository<S3SyncProgress>().FirstOrDefaultAsync(
                 p => p.JobId == jobId && p.S3Key == s3Key);
-            return await unitOfWork.Repository<S3SyncProgress>().GetEntityWithSpec(spec);
         }
 
         public async Task CreateUploadProgressAsync(S3SyncProgress progress)

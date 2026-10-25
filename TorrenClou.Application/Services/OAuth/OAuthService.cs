@@ -1,6 +1,5 @@
-﻿using TorrenClou.Core.Entities;
+using TorrenClou.Core.Entities;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Application.Services.OAuth
 {
@@ -8,8 +7,7 @@ namespace TorrenClou.Application.Services.OAuth
     {
         public async Task<UserOAuthCredential?> GetUserOAuthCredentialByClientId(string clientId, int userId)
         {
-            var existingSpec = new BaseSpecification<UserOAuthCredential>(c => c.UserId == userId && c.ClientId == clientId);
-            return await unitOfWork.Repository<UserOAuthCredential>().GetEntityWithSpec(existingSpec);
+            return await unitOfWork.Repository<UserOAuthCredential>().FirstOrDefaultAsync(c => c.UserId == userId && c.ClientId == clientId);
 
         }
         public async Task Update(UserOAuthCredential credential)
@@ -30,9 +28,7 @@ namespace TorrenClou.Application.Services.OAuth
 
         public async Task<IReadOnlyCollection<UserOAuthCredential>> GetAll(int userId)
         {
-            var spec = new BaseSpecification<UserOAuthCredential>(c => c.UserId == userId);
-            var credentials = await unitOfWork.Repository<UserOAuthCredential>().ListAsync(spec);
-            return credentials;
+            return await unitOfWork.Repository<UserOAuthCredential>().ListAsync(c => c.UserId == userId);
 
 
 
@@ -41,8 +37,7 @@ namespace TorrenClou.Application.Services.OAuth
         public Task<UserOAuthCredential?> GetUserOAuthCredentialById(int credId, int userId)
         {
 
-            var existingSpec = new BaseSpecification<UserOAuthCredential>(c => c.UserId == userId && c.Id == credId);
-            return unitOfWork.Repository<UserOAuthCredential>().GetEntityWithSpec(existingSpec);
+            return unitOfWork.Repository<UserOAuthCredential>().FirstOrDefaultAsync(c => c.UserId == userId && c.Id == credId);
 
         }
     }

@@ -8,7 +8,6 @@ using TorrenClou.Core.Entities;
 using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Infrastructure.Services.Drive
 {

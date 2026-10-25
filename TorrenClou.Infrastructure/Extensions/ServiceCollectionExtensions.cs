@@ -9,6 +9,7 @@ using TorrenClou.Application.Services.Setup;
 using TorrenClou.Infrastructure.Services.Drive;
 using TorrenClou.Infrastructure.Services.Handlers;
 using TorrenClou.Infrastructure.Services.Health;
+using TorrenClou.Infrastructure.Services.Transfer;
 using TorrenClou.Infrastructure.Services.Redis;
 using TorrenClou.Core.Options;
 
@@ -105,6 +106,11 @@ namespace TorrenClou.Infrastructure.Extensions
 
             services.AddScoped<IStorageProfileHealthService, StorageProfileHealthService>();
             services.AddScoped<IUploadRoutingService, UploadRoutingService>();
+            services.TryAddScoped<IS3JobService, S3JobService>();
+            services.AddScoped<IStorageDestination, GoogleDriveStorageDestination>();
+            services.AddScoped<IStorageDestination, S3StorageDestination>();
+            services.TryAddScoped<IJobExecutionTracker, JobExecutionTracker>();
+            services.AddScoped<IStorageTransferOrchestrator, StorageTransferOrchestrator>();
 
             return services;
         }

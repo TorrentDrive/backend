@@ -4,7 +4,6 @@ using TorrenClou.Core.DTOs.Maintenance;
 using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Enums;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Infrastructure.Services
 {
@@ -152,10 +151,11 @@ namespace TorrenClou.Infrastructure.Services
             {
                 // Load without the user filter first: a job that exists but belongs to
                 // someone else must not be mistaken for an orphan.
-                var spec = new BaseSpecification<UserJob>(j => jobIds.Contains(j.Id));
-                spec.AddInclude(j => j.RequestFile);
+                var matchingJobs = await unitOfWork.Repository<UserJob>().ListAsync(
+                    criteria: j => jobIds.Contains(j.Id),
+                    includes: j => j.RequestFile);
 
-                foreach (var job in await unitOfWork.Repository<UserJob>().ListAsync(spec))
+                foreach (var job in matchingJobs)
                 {
                     knownJobIds.Add(job.Id);
                     if (job.UserId == userId) jobsById[job.Id] = job;

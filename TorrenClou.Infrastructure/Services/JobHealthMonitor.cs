@@ -8,7 +8,6 @@ using TorrenClou.Core.Entities;
 using TorrenClou.Core.Enums;
 using TorrenClou.Core.Interfaces;
 using TorrenClou.Core.Options;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Infrastructure.Services
 {
@@ -70,14 +69,12 @@ namespace TorrenClou.Infrastructure.Services
 
             // DYNAMIC SPECIFICATION
             // We now query based on the aggregated list of statuses from our strategies
-            var stuckJobsSpec = new BaseSpecification<TJob>(j =>
+            var stuckJobs = await unitOfWork.Repository<TJob>().ListAsync(j =>
                 _allMonitoredStatuses.Contains(j.Status) &&
                 (
                     (j.LastHeartbeat != null && j.LastHeartbeat < staleTime) ||
                     (j.LastHeartbeat == null && j.StartedAt != null && j.StartedAt < staleTime)
                 ));
-
-            var stuckJobs = await unitOfWork.Repository<TJob>().ListAsync(stuckJobsSpec);
 
             if (!stuckJobs.Any()) return;
 

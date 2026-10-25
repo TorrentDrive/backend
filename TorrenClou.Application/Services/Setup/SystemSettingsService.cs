@@ -5,7 +5,6 @@ using TorrenClou.Core.Entities;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
 using TorrenClou.Core.Options;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Application.Services.Setup
 {
@@ -116,9 +115,8 @@ namespace TorrenClou.Application.Services.Setup
         {
             // One row by design. Ordering by Id keeps the choice stable if a duplicate ever
             // slips in through a concurrent create.
-            var spec = new BaseSpecification<SystemSettings>(_ => true);
-            var all = await unitOfWork.Repository<SystemSettings>().ListAsync(spec);
-            return all.OrderBy(s => s.Id).FirstOrDefault();
+            var all = await unitOfWork.Repository<SystemSettings>().ListAsync(orderBy: q => q.OrderBy(s => s.Id), take: 1);
+            return all.FirstOrDefault();
         }
 
         private static void Validate(UpdateSystemSettingsRequestDto r)

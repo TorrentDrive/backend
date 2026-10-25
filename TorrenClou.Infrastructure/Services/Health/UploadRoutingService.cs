@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TorrenClou.Core.DTOs.Storage;
 using TorrenClou.Core.Entities.Jobs;
@@ -6,7 +6,6 @@ using TorrenClou.Core.Enums;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
 using TorrenClou.Core.Options;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Infrastructure.Services.Health
 {
@@ -97,10 +96,8 @@ namespace TorrenClou.Infrastructure.Services.Health
             bool allowFailover,
             CancellationToken cancellationToken = default)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(
-                p => p.Id == targetProfileId && p.UserId == userId && p.IsActive);
-
-            var target = await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(spec)
+            var target = await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(
+                p => p.Id == targetProfileId && p.UserId == userId && p.IsActive)
                 ?? throw new NotFoundException("ProfileNotFound", "Storage profile not found.");
 
             var health = await healthService.GetHealthAsync(target, forceRefresh: true, cancellationToken);
@@ -228,13 +225,11 @@ namespace TorrenClou.Infrastructure.Services.Health
             StorageProviderType providerType,
             HashSet<int> excluded)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(p =>
+            var profiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(p =>
                 p.UserId == userId &&
                 p.IsActive &&
                 p.ProviderType == providerType &&
                 !p.NeedsReauth);
-
-            var profiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(spec);
 
             return [.. profiles
                 .Where(p => !excluded.Contains(p.Id))

@@ -2,7 +2,6 @@ using Microsoft.Extensions.Logging;
 using TorrenClou.Core.DTOs.Settings;
 using TorrenClou.Core.Entities;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Application.Services
 {
@@ -31,8 +30,7 @@ namespace TorrenClou.Application.Services
 
         public async Task<UserSettings> GetOrCreateAsync(int userId)
         {
-            var spec = new BaseSpecification<UserSettings>(s => s.UserId == userId);
-            var settings = await unitOfWork.Repository<UserSettings>().GetEntityWithSpec(spec);
+            var settings = await unitOfWork.Repository<UserSettings>().FirstOrDefaultAsync(s => s.UserId == userId);
 
             if (settings != null) return settings;
 

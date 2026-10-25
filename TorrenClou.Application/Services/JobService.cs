@@ -10,13 +10,11 @@ using TorrenClou.Core.Enums;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Extensions;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Application.Services
 {
     public class JobService(
         IUnitOfWork unitOfWork,
-        IRedisStreamService redisStreamService,
         IJobStatusService jobStatusService,
         IServiceScopeFactory serviceScopeFactory,
         IJobHandlerFactory jobHandlerFactory,
@@ -25,8 +23,6 @@ namespace TorrenClou.Application.Services
         IStorageProfileHealthService storageHealthService,
         ILogger<JobService> logger) : IJobService
     {
-        private const string JobStreamKey = "jobs:stream";
-
         public async Task<JobCreationResult> CreateAndDispatchJobAsync(int torrentFileId, int userId, string[]? selectedFiles, int storageProfileId)
         {
             logger.LogInformation("Create and dispatch job requested | TorrentFileId: {TorrentFileId} | UserId: {UserId}", torrentFileId, userId);
@@ -60,19 +56,21 @@ namespace TorrenClou.Application.Services
             logger.LogInformation("Job created | JobId: {JobId} | StorageProfileId: {StorageProfileId} | RequestFileId: {RequestFileId}",
                 job.Id, storageProfile.Id, torrentFileId);
 
+            using var scope = serviceScopeFactory.CreateScope();
+            var backgroundJobClient = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
+            var hangfireJobId = await RetryDownloadPhaseAsync(job, backgroundJobClient);
+
+            job.HangfireJobId = hangfireJobId;
+            job.LastHeartbeat = DateTime.UtcNow;
+            job.CurrentState = "Queued for download";
+            await unitOfWork.Complete();
+
             await jobStatusService.RecordInitialJobStatusAsync(job, new
             {
                 storageProfileId = storageProfile.Id,
                 requestFileId = torrentFileId,
-                selectedFilesCount = job.SelectedFilePaths?.Length ?? 0
-            });
-
-            await redisStreamService.PublishAsync(JobStreamKey, new Dictionary<string, string>
-            {
-                { "jobId", job.Id.ToString() },
-                { "userId", userId.ToString() },
-                { "jobType", job.Type.ToString() },
-                { "createdAt", DateTime.UtcNow.ToString("O") }
+                selectedFilesCount = job.SelectedFilePaths?.Length ?? 0,
+                hangfireJobId
             });
 
             logger.LogInformation("Job creation and dispatch completed successfully | JobId: {JobId} | UserId: {UserId}", job.Id, userId);
@@ -179,12 +177,15 @@ namespace TorrenClou.Application.Services
         {
             logger.LogDebug("Get user jobs requested | UserId: {UserId} | Page: {PageNumber} | PageSize: {PageSize} | Status: {Status}", userId, pageNumber, pageSize, status);
 
-            var spec = new UserJobsSpecification(userId, pageNumber, pageSize, status);
-            var countSpec = new BaseSpecification<UserJob>(job =>
-                job.UserId == userId && (status == null || job.Status == status));
-
-            var jobs = await unitOfWork.Repository<UserJob>().ListAsync(spec);
-            var totalCount = await unitOfWork.Repository<UserJob>().CountAsync(countSpec);
+            var jobs = await unitOfWork.Repository<UserJob>().ListAsync(
+                criteria: job => job.UserId == userId && (status == null || job.Status == status),
+                orderBy: q => q.OrderByDescending(job => job.CreatedAt),
+                skip: (pageNumber - 1) * pageSize,
+                take: pageSize,
+                job => job.StorageProfile,
+                job => job.RequestFile);
+            var totalCount = await unitOfWork.Repository<UserJob>().CountAsync(
+                job => job.UserId == userId && (status == null || job.Status == status));
 
             var items = jobs.Select(job => new JobDto
             {
@@ -227,11 +228,10 @@ namespace TorrenClou.Application.Services
         {
             logger.LogDebug("Get job by ID requested | JobId: {JobId} | UserId: {UserId} | Role: {Role}", jobId, userId, userRole);
 
-            var spec = new BaseSpecification<UserJob>(job => job.Id == jobId && job.UserId == userId);
-            spec.AddInclude(job => job.StorageProfile);
-            spec.AddInclude(job => job.RequestFile);
-
-            var job = await unitOfWork.Repository<UserJob>().GetEntityWithSpec(spec);
+            var job = await unitOfWork.Repository<UserJob>().FirstOrDefaultAsync(
+                job => job.Id == jobId && job.UserId == userId,
+                job => job.StorageProfile,
+                job => job.RequestFile);
 
             if (job == null)
             {
@@ -280,8 +280,7 @@ namespace TorrenClou.Application.Services
         {
             logger.LogDebug("Get user job statistics requested | UserId: {UserId}", userId);
 
-            var allJobsSpec = new BaseSpecification<UserJob>(job => job.UserId == userId);
-            var allJobs = await unitOfWork.Repository<UserJob>().ListAsync(allJobsSpec);
+            var allJobs = await unitOfWork.Repository<UserJob>().ListAsync(job => job.UserId == userId);
 
             var statistics = new JobStatisticsDto
             {
@@ -311,8 +310,14 @@ namespace TorrenClou.Application.Services
         {
             logger.LogDebug("Get active jobs by storage profile requested | StorageProfileId: {StorageProfileId}", storageProfileId);
 
-            var spec = new ActiveJobsByStorageProfileSpecification(storageProfileId);
-            var activeJobs = await unitOfWork.Repository<UserJob>().ListAsync(spec);
+            var activeJobs = await unitOfWork.Repository<UserJob>().ListAsync(j =>
+                j.StorageProfileId == storageProfileId &&
+                (j.Status == JobStatus.QUEUED ||
+                 j.Status == JobStatus.DOWNLOADING ||
+                 j.Status == JobStatus.PENDING_UPLOAD ||
+                 j.Status == JobStatus.UPLOADING ||
+                 j.Status == JobStatus.TORRENT_DOWNLOAD_RETRY ||
+                 j.Status == JobStatus.UPLOAD_RETRY));
 
             logger.LogDebug("Found {Count} active jobs for storage profile | StorageProfileId: {StorageProfileId}", activeJobs.Count, storageProfileId);
             return activeJobs;
@@ -323,12 +328,11 @@ namespace TorrenClou.Application.Services
             logger.LogInformation("Retry job requested | JobId: {JobId} | UserId: {UserId} | Role: {Role} | TargetProfileId: {TargetProfileId}",
                 jobId, userId, userRole, targetStorageProfileId);
 
-            var spec = new BaseSpecification<UserJob>(j => j.Id == jobId);
-            spec.AddInclude(j => j.StorageProfile);
-            spec.AddInclude(j => j.RequestFile);
-            spec.AddInclude(j => j.User);
-
-            var job = await unitOfWork.Repository<UserJob>().GetEntityWithSpec(spec);
+            var job = await unitOfWork.Repository<UserJob>().FirstOrDefaultAsync(
+                j => j.Id == jobId,
+                j => j.StorageProfile,
+                j => j.RequestFile,
+                j => j.User);
             ValidateJobExistsAndAuthorized(job, userId, userRole, "retry");
 
             // Status guards run first so a rejected retry never mutates the job.
@@ -408,11 +412,10 @@ namespace TorrenClou.Application.Services
                 "Change job storage profile requested | JobId: {JobId} | UserId: {UserId} | TargetProfileId: {TargetProfileId} | AllowFailover: {AllowFailover}",
                 jobId, userId, storageProfileId, allowFailover);
 
-            var spec = new BaseSpecification<UserJob>(j => j.Id == jobId);
-            spec.AddInclude(j => j.StorageProfile);
-            spec.AddInclude(j => j.RequestFile);
-
-            var job = await unitOfWork.Repository<UserJob>().GetEntityWithSpec(spec);
+            var job = await unitOfWork.Repository<UserJob>().FirstOrDefaultAsync(
+                j => j.Id == jobId,
+                j => j.StorageProfile,
+                j => j.RequestFile);
             ValidateJobExistsAndAuthorized(job, userId, userRole, "change storage profile");
             ValidateJobForStorageChange(job!, userId);
 
@@ -484,14 +487,12 @@ namespace TorrenClou.Application.Services
             var health = await storageHealthService.GetHealthAsync(profile);
             if (health.IsUsable) return;
 
-            var alternativesSpec = new BaseSpecification<UserStorageProfile>(p =>
+            var alternatives = await unitOfWork.Repository<UserStorageProfile>().ListAsync(p =>
                 p.UserId == userId &&
                 p.IsActive &&
                 p.Id != profile.Id &&
                 p.ProviderType == profile.ProviderType &&
                 !p.NeedsReauth);
-
-            var alternatives = await unitOfWork.Repository<UserStorageProfile>().ListAsync(alternativesSpec);
 
             if (alternatives.Count == 0)
             {
@@ -547,13 +548,13 @@ namespace TorrenClou.Application.Services
             }
 
             var activeDownloads = await unitOfWork.Repository<UserJob>().CountAsync(
-                new BaseSpecification<UserJob>(j => j.Status == JobStatus.DOWNLOADING));
+                j => j.Status == JobStatus.DOWNLOADING);
 
             var queuedDownloads = await unitOfWork.Repository<UserJob>().CountAsync(
-                new BaseSpecification<UserJob>(j => j.Status == JobStatus.QUEUED));
+                j => j.Status == JobStatus.QUEUED);
 
             var activeUploads = await unitOfWork.Repository<UserJob>().CountAsync(
-                new BaseSpecification<UserJob>(j => j.Status == JobStatus.UPLOADING));
+                j => j.Status == JobStatus.UPLOADING);
 
             return new JobQueueStatusDto
             {
@@ -569,12 +570,11 @@ namespace TorrenClou.Application.Services
         {
             logger.LogInformation("Force start requested | JobId: {JobId} | UserId: {UserId} | Role: {Role}", jobId, userId, userRole);
 
-            var spec = new BaseSpecification<UserJob>(j => j.Id == jobId);
-            spec.AddInclude(j => j.StorageProfile);
-            spec.AddInclude(j => j.RequestFile);
-            spec.AddInclude(j => j.User);
-
-            var job = await unitOfWork.Repository<UserJob>().GetEntityWithSpec(spec);
+            var job = await unitOfWork.Repository<UserJob>().FirstOrDefaultAsync(
+                j => j.Id == jobId,
+                j => j.StorageProfile,
+                j => j.RequestFile,
+                j => j.User);
             ValidateJobExistsAndAuthorized(job, userId, userRole, "force start");
             ValidateJobForForceStart(job!, userId);
 
@@ -633,10 +633,9 @@ namespace TorrenClou.Application.Services
         {
             logger.LogInformation("Cancel job requested | JobId: {JobId} | UserId: {UserId} | Role: {Role}", jobId, userId, userRole);
 
-            var spec = new BaseSpecification<UserJob>(j => j.Id == jobId);
-            spec.AddInclude(j => j.StorageProfile);
-
-            var job = await unitOfWork.Repository<UserJob>().GetEntityWithSpec(spec);
+            var job = await unitOfWork.Repository<UserJob>().FirstOrDefaultAsync(
+                j => j.Id == jobId,
+                j => j.StorageProfile);
             ValidateJobExistsAndAuthorized(job, userId, userRole, "cancel");
 
             ValidateJobForCancel(job!, userId, userRole);
@@ -844,12 +843,10 @@ namespace TorrenClou.Application.Services
                 foreach (var status in handler.GetFailedStatuses())
                     failedStatuses.Add(status);
 
-            var existingJobSpec = new BaseSpecification<UserJob>(j =>
+            var existingJob = await unitOfWork.Repository<UserJob>().FirstOrDefaultAsync(j =>
                 j.UserId == userId &&
                 j.RequestFileId == requestFileId &&
                 !failedStatuses.Contains(j.Status));
-
-            var existingJob = await unitOfWork.Repository<UserJob>().GetEntityWithSpec(existingJobSpec);
 
             if (existingJob != null)
             {
@@ -950,33 +947,5 @@ namespace TorrenClou.Application.Services
             return false;
         }
 
-        // --- Worker-facing job state updates ---
-
-        public async Task UpdateJobStartedAtAsync(UserJob job)
-        {
-            if (job.StartedAt == null)
-                job.StartedAt = DateTime.UtcNow;
-            await unitOfWork.Complete();
-        }
-
-        public async Task UpdateJobProgressAsync(UserJob job, long bytesUploaded, double bytesPerSecond = 0)
-        {
-            job.BytesUploaded = bytesUploaded;
-            job.UploadSpeedBytesPerSecond = bytesPerSecond;
-            job.LastHeartbeat = DateTime.UtcNow;
-            await unitOfWork.Complete();
-        }
-
-        public async Task UpdateHeartbeatAsync(int jobId)
-        {
-            var spec = new BaseSpecification<UserJob>(j => j.Id == jobId);
-            var job = await unitOfWork.Repository<UserJob>().GetEntityWithSpec(spec);
-
-            if (job == null || job.Status != JobStatus.UPLOADING)
-                return;
-
-            job.LastHeartbeat = DateTime.UtcNow;
-            await unitOfWork.Complete();
-        }
     }
 }

@@ -195,7 +195,6 @@ namespace TorrenClou.Infrastructure.Extensions
             services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(configurationOptions));
             services.AddSingleton<IRedisCacheService, RedisCacheService>();
             services.AddScoped<IRedisLockService, RedisLockService>();
-            services.AddSingleton<IRedisStreamService, RedisStreamService>();
 
             return services;
         }

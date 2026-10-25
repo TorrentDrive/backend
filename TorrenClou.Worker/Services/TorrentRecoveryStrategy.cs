@@ -4,7 +4,6 @@ using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Enums;
 using TorrenClou.Core.Interfaces;
 using TorrenClou.Core.Interfaces.Hangfire;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Worker.Services
 {
@@ -38,9 +37,9 @@ namespace TorrenClou.Worker.Services
                 using var uploadScope = serviceScopeFactory.CreateScope();
                 var uploadUnitOfWork = uploadScope.ServiceProvider.GetRequiredService<IUnitOfWork>();
 
-                var jobSpec = new BaseSpecification<UserJob>(j => j.Id == userJob.Id);
-                jobSpec.AddInclude(j => j.StorageProfile);
-                var reloadedJob = await uploadUnitOfWork.Repository<UserJob>().GetEntityWithSpec(jobSpec);
+                var reloadedJob = await uploadUnitOfWork.Repository<UserJob>().FirstOrDefaultAsync(
+                    j => j.Id == userJob.Id,
+                    j => j.StorageProfile);
 
                 if (reloadedJob == null)
                 {

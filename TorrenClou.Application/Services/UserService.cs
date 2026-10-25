@@ -1,6 +1,5 @@
-﻿using TorrenClou.Core.Entities;
+using TorrenClou.Core.Entities;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Application.Services
 {
@@ -8,8 +7,7 @@ namespace TorrenClou.Application.Services
     {
         public async Task<bool> UserExistsAsync(string email)
         {
-            var spec = new BaseSpecification<User>(u => u.Email.ToLower() == email.ToLower());
-            var user = await unitOfWork.Repository<User>().GetEntityWithSpec(spec);
+            var user = await unitOfWork.Repository<User>().FirstOrDefaultAsync(u => u.Email.ToLower() == email.ToLower());
             return user != null;
         }
         public async Task<User> CreateUser(string email, string name)
@@ -26,8 +24,7 @@ namespace TorrenClou.Application.Services
         }
         public async Task<User?> GetUserByEmailAsync(string email)
         {
-            var spec = new BaseSpecification<User>(u => u.Email.ToLower() == email.ToLower());
-            return await unitOfWork.Repository<User>().GetEntityWithSpec(spec);
+            return await unitOfWork.Repository<User>().FirstOrDefaultAsync(u => u.Email.ToLower() == email.ToLower());
         }
 
         public async Task<User?> GetUserByIdAsync(int userId)

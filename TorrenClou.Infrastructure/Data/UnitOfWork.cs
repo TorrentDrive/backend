@@ -1,4 +1,4 @@
-﻿using System.Collections;
+﻿using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using TorrenClou.Core.Entities;
 using TorrenClou.Core.Interfaces;
@@ -8,7 +8,7 @@ namespace TorrenClou.Infrastructure.Data
 {
     public class UnitOfWork(ApplicationDbContext context) : IUnitOfWork
     {
-        private Hashtable _repositories;
+        private readonly ConcurrentDictionary<Type, object> _repositories = new();
 
         public async Task<int> Complete()
         {
@@ -22,19 +22,7 @@ namespace TorrenClou.Infrastructure.Data
 
         public IGenericRepository<T> Repository<T>() where T : BaseEntity
         {
-            _repositories ??= new Hashtable();
-
-            var type = typeof(T).Name;
-
-            if (!_repositories.ContainsKey(type))
-            {
-                var repositoryType = typeof(GenericRepository<>);
-                var repositoryInstance = Activator.CreateInstance(repositoryType.MakeGenericType(typeof(T)), context);
-
-                _repositories.Add(type, repositoryInstance);
-            }
-
-            return (IGenericRepository<T>)_repositories[type];
+            return (IGenericRepository<T>)_repositories.GetOrAdd(typeof(T), _ => new GenericRepository<T>(context));
         }
 
         public void Detach<T>(T entity) where T : BaseEntity

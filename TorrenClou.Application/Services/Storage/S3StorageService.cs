@@ -4,7 +4,6 @@ using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Enums;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Application.Services.Storage
 {
@@ -48,8 +47,7 @@ namespace TorrenClou.Application.Services.Storage
 
             if (setAsDefault)
             {
-                var allProfilesSpec = new BaseSpecification<UserStorageProfile>(p => p.UserId == userId && p.IsActive);
-                var allProfiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(allProfilesSpec);
+                var allProfiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(p => p.UserId == userId && p.IsActive);
                 foreach (var p in allProfiles)
                     p.IsDefault = false;
             }

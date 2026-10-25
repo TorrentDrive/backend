@@ -4,7 +4,6 @@ using TorrenClou.Core.DTOs.Auth;
 using TorrenClou.Core.Entities;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Application.Services.Setup
 {
@@ -126,14 +125,12 @@ namespace TorrenClou.Application.Services.Setup
 
         private async Task<bool> AnyUserHasPasswordAsync()
         {
-            var spec = new BaseSpecification<User>(u => u.PasswordHash != null);
-            return await unitOfWork.Repository<User>().GetEntityWithSpec(spec) != null;
+            return await unitOfWork.Repository<User>().FirstOrDefaultAsync(u => u.PasswordHash != null) != null;
         }
 
         private async Task<User?> FindUserByEmailAsync(string email)
         {
-            var spec = new BaseSpecification<User>(u => u.Email.ToLower() == email.ToLower());
-            return await unitOfWork.Repository<User>().GetEntityWithSpec(spec);
+            return await unitOfWork.Repository<User>().FirstOrDefaultAsync(u => u.Email.ToLower() == email.ToLower());
         }
 
         private static void Validate(CreateAdminRequestDto request)

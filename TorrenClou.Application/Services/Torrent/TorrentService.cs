@@ -3,7 +3,6 @@ using TorrenClou.Core.DTOs.Torrents;
 using TorrenClou.Core.Entities;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 using RequestedFile = TorrenClou.Core.Entities.Torrents.RequestedFile;
 
 namespace TorrenClou.Application.Services.Torrent
@@ -118,11 +117,9 @@ namespace TorrenClou.Application.Services.Torrent
             if (torrent.TotalSize <= 0)
                 throw new ValidationException("InvalidFileSize", "FileSize must be greater than zero. Cannot create RequestedFile.");
 
-            var searchCriteria = new BaseSpecification<RequestedFile>(t =>
+            var existingTorrent = await unitOfWork.Repository<RequestedFile>().FirstOrDefaultAsync(t =>
                 t.InfoHash == torrent.InfoHash &&
                 t.UploadedByUserId == userId);
-
-            var existingTorrent = await unitOfWork.Repository<RequestedFile>().GetEntityWithSpec(searchCriteria);
 
             if (existingTorrent != null)
                 return existingTorrent;

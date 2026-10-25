@@ -1,11 +1,11 @@
-using Amazon.S3;
+﻿using Amazon.S3;
 using Amazon.S3.Model;
 using Microsoft.Extensions.Logging;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
 using PartETag = TorrenClou.Core.DTOs.Storage.S3.PartETag;
 
-namespace TorrenClou.S3.Worker.Services
+namespace TorrenClou.Infrastructure.Services.Transfer
 {
     /// <summary>
     /// S3 resumable upload service with user-specific credentials (NO FALLBACK)

@@ -1,4 +1,4 @@
-using Hangfire;
+﻿using Hangfire;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using TorrenClou.Core.Entities.Jobs;
@@ -9,7 +9,6 @@ using TorrenClou.Infrastructure.Extensions;
 using TorrenClou.Infrastructure.Filters;
 using TorrenClou.Infrastructure.Services;
 using TorrenClou.Infrastructure.Services.Redis;
-using TorrenClou.Worker;
 using TorrenClou.Worker.Services;
 
 const string ServiceName = "torrenclou-worker";
@@ -45,11 +44,15 @@ try
     builder.Services.AddScoped<ITransferSpeedMetrics, TransferSpeedMetrics>();
     builder.Services.AddScoped<IJobStatusService, JobStatusService>();
     builder.Services.AddSingleton<IJobRecoveryStrategy, TorrentRecoveryStrategy>();
+    builder.Services.AddStorageRoutingServices(builder.Configuration);
+    builder.Services.AddScoped<IStorageProviderHandler, TorrenClou.Infrastructure.Services.Handlers.GoogleDriveStorageProviderHandler>();
+    builder.Services.AddScoped<IStorageProviderHandler, TorrenClou.Infrastructure.Services.Handlers.S3StorageProviderHandler>();
+    builder.Services.AddScoped<IJobTypeHandler, TorrenClou.Infrastructure.Services.Handlers.TorrentJobTypeHandler>();
+    builder.Services.AddScoped<IJobHandlerFactory, TorrenClou.Infrastructure.Services.Handlers.JobHandlerFactory>();
 
     // Hosted Services
     builder.Services.Configure<JobHealthMonitorOptions>(opts => opts.CheckInterval = TimeSpan.FromMinutes(2));
     builder.Services.AddHostedService<JobHealthMonitor<UserJob>>();
-    builder.Services.AddHostedService<TorrentWorker>();
 
     // Configure host shutdown timeout to allow Hangfire graceful shutdown
     builder.Services.Configure<HostOptions>(opts => 

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TorrenClou.Core.DTOs.Storage;
@@ -7,7 +7,6 @@ using TorrenClou.Core.Enums;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
 using TorrenClou.Core.Options;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Infrastructure.Services.Health
 {
@@ -107,8 +106,7 @@ namespace TorrenClou.Infrastructure.Services.Health
             bool forceRefresh = false,
             CancellationToken cancellationToken = default)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(p => p.UserId == userId && p.IsActive);
-            var profiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(spec);
+            var profiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(p => p.UserId == userId && p.IsActive);
 
             var results = new List<StorageProfileHealthDto>(profiles.Count);
 
@@ -193,8 +191,7 @@ namespace TorrenClou.Infrastructure.Services.Health
 
         private async Task<UserStorageProfile?> LoadProfileAsync(int userId, int profileId)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(p => p.Id == profileId && p.UserId == userId);
-            return await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(spec);
+            return await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(p => p.Id == profileId && p.UserId == userId);
         }
 
         /// <summary>

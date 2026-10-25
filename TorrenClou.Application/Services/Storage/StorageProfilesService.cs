@@ -5,7 +5,6 @@ using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Enums;
 using TorrenClou.Core.Exceptions;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Application.Services.Storage
 {
@@ -13,11 +12,8 @@ namespace TorrenClou.Application.Services.Storage
     {
         public async Task<List<StorageProfileDto>> GetStorageProfilesAsync(int userId)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(
-                p => p.UserId == userId && p.IsActive
-            );
-
-            var profiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(spec);
+            var profiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(
+                p => p.UserId == userId && p.IsActive);
 
             return profiles
                 .OrderBy(p => p.IsDefault ? 0 : 1)
@@ -45,10 +41,8 @@ namespace TorrenClou.Application.Services.Storage
 
         public async Task<StorageProfileDetailDto> GetStorageProfileAsync(int userId, int id)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(
-                p => p.Id == id && p.UserId == userId && p.IsActive
-            );
-            var profile = await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(spec);
+            var profile = await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(
+                p => p.Id == id && p.UserId == userId && p.IsActive);
 
             if (profile == null)
                 throw new NotFoundException("ProfileNotFound", "Storage profile not found");
@@ -77,18 +71,14 @@ namespace TorrenClou.Application.Services.Storage
 
         public async Task SetDefaultProfileAsync(int userId, int id)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(
-                p => p.Id == id && p.UserId == userId && p.IsActive
-            );
-            var profile = await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(spec);
+            var profile = await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(
+                p => p.Id == id && p.UserId == userId && p.IsActive);
 
             if (profile == null)
                 throw new NotFoundException("ProfileNotFound", "Storage profile not found");
 
-            var allProfilesSpec = new BaseSpecification<UserStorageProfile>(
-                p => p.UserId == userId && p.IsActive
-            );
-            var allProfiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(allProfilesSpec);
+            var allProfiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(
+                p => p.UserId == userId && p.IsActive);
 
             foreach (var p in allProfiles)
                 p.IsDefault = false;
@@ -99,10 +89,8 @@ namespace TorrenClou.Application.Services.Storage
 
         public async Task DisconnectProfileAsync(int userId, int id)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(
-                p => p.Id == id && p.UserId == userId
-            );
-            var profile = await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(spec);
+            var profile = await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(
+                p => p.Id == id && p.UserId == userId);
 
             if (profile == null)
                 throw new NotFoundException("ProfileNotFound", "Storage profile not found");
@@ -125,8 +113,7 @@ namespace TorrenClou.Application.Services.Storage
 
         public async Task DeleteStorageProfileAsync(int userId, int profileId)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(p => p.Id == profileId && p.UserId == userId);
-            var profile = await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(spec);
+            var profile = await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(p => p.Id == profileId && p.UserId == userId);
 
             if (profile == null)
                 throw new NotFoundException("ProfileNotFound", "Storage profile not found");
@@ -144,10 +131,8 @@ namespace TorrenClou.Application.Services.Storage
 
         public async Task<UserStorageProfile?> GetDefaultStorageProfileAsync(int userId)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(
-                p => p.UserId == userId && p.IsActive && p.IsDefault
-            );
-            return await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(spec);
+            return await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(
+                p => p.UserId == userId && p.IsActive && p.IsDefault);
         }
 
         public async Task<UserStorageProfile> Add(UserStorageProfile userStorageProfile)
@@ -184,23 +169,20 @@ namespace TorrenClou.Application.Services.Storage
 
         public async Task<UserStorageProfile?> GetProfileBySpecAsync(int userId, int profileId, bool activeOnly = true)
         {
-            var spec = activeOnly
-                ? new BaseSpecification<UserStorageProfile>(p => p.Id == profileId && p.UserId == userId && p.IsActive)
-                : new BaseSpecification<UserStorageProfile>(p => p.Id == profileId && p.UserId == userId);
-            return await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(spec);
+            return activeOnly
+                ? await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(p => p.Id == profileId && p.UserId == userId && p.IsActive)
+                : await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(p => p.Id == profileId && p.UserId == userId);
         }
 
         public async Task<bool> HasDuplicateEmailAsync(int userId, int excludeProfileId, string email)
         {
-            var spec = new BaseSpecification<UserStorageProfile>(
+            var duplicate = await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(
                 p => p.UserId == userId
                     && p.Id != excludeProfileId
                     && p.ProviderType == StorageProviderType.GoogleDrive
                     && p.IsActive
                     && p.Email != null
-                    && p.Email.ToLower() == email.ToLower()
-            );
-            var duplicate = await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(spec);
+                    && p.Email.ToLower() == email.ToLower());
             return duplicate != null;
         }
 
@@ -212,10 +194,8 @@ namespace TorrenClou.Application.Services.Storage
 
         public async Task<bool> HasDefaultProfile(int userId)
         {
-            var defaultProfileSpec = new BaseSpecification<UserStorageProfile>(
-                p => p.UserId == userId && p.IsDefault && p.IsActive
-            );
-            return await unitOfWork.Repository<UserStorageProfile>().GetEntityWithSpec(defaultProfileSpec) != null;
+            return await unitOfWork.Repository<UserStorageProfile>().FirstOrDefaultAsync(
+                p => p.UserId == userId && p.IsDefault && p.IsActive) != null;
         }
 
         public async Task Save()

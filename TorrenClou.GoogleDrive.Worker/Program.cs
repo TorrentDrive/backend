@@ -1,4 +1,4 @@
-using Serilog;
+﻿using Serilog;
 using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Interfaces;
 using TorrenClou.Core.Interfaces.Hangfire;
@@ -7,7 +7,6 @@ using TorrenClou.Infrastructure.Extensions;
 using TorrenClou.Infrastructure.Services;
 using TorrenClou.Infrastructure.Services.Drive;
 using TorrenClou.Infrastructure.Settings;
-using TorrenClou.GoogleDrive.Worker;
 using TorrenClou.GoogleDrive.Worker.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -55,7 +54,6 @@ try
     // Hosted Services
     builder.Services.Configure<JobHealthMonitorOptions>(opts => opts.CheckInterval = TimeSpan.FromMinutes(2));
     builder.Services.AddHostedService<JobHealthMonitor<UserJob>>();
-    builder.Services.AddHostedService<GoogleDriveWorker>();
 
     // Configure host shutdown timeout to allow Hangfire graceful shutdown
     builder.Services.Configure<HostOptions>(opts => 

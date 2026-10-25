@@ -1,11 +1,11 @@
-﻿using Hangfire;
+using Hangfire;
 using MonoTorrent;
 using MonoTorrent.Client;
 using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Enums;
 using TorrenClou.Core.Interfaces;
 using TorrenClou.Core.Interfaces.Hangfire;
-using TorrenClou.Core.Specifications;
+using System.Linq.Expressions;
 using TorrenClou.Infrastructure.Workers;
 
 namespace TorrenClou.Worker.Services
@@ -18,7 +18,9 @@ namespace TorrenClou.Worker.Services
         IUnitOfWork unitOfWork,
         IHttpClientFactory httpClientFactory,
         ILogger<TorrentDownloadJob> logger,
-        IRedisStreamService redisStreamService,
+        IBackgroundJobClient backgroundJobClient,
+        IJobHandlerFactory jobHandlerFactory,
+        IUploadRoutingService uploadRoutingService,
         ITransferSpeedMetrics speedMetrics,
         IJobStatusService jobStatusService,
         IJobCancellationSignal jobCancellationSignal,
@@ -40,11 +42,11 @@ namespace TorrenClou.Worker.Services
 
         protected override string LogPrefix => "[TORRENT:DOWNLOAD]";
 
-        protected override void ConfigureSpecification(BaseSpecification<UserJob> spec)
-        {
-            spec.AddInclude(j => j.RequestFile);
-            spec.AddInclude(j => j.StorageProfile);
-        }
+        protected override Expression<Func<UserJob, object?>>[] GetIncludes() =>
+        [
+            j => j.RequestFile,
+            j => j.StorageProfile
+        ];
 
         // Removed DisableConcurrentExecution to allow concurrent downloads (limited by semaphore)
         [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 60, 300, 900 }),]
@@ -497,54 +499,61 @@ namespace TorrenClou.Worker.Services
             // Save final state
             await SaveEngineStateAsync(engine, "download-complete");
 
-            // Store original download path (block storage path) for cleanup
-
             try
             {
-                // Step 1: Update job status to PENDING_UPLOAD
-                job.CurrentState = "Download complete. Starting upload...";
                 job.BytesDownloaded = job.TotalBytes;
-                // Nothing is downloading any more; a stale rate would keep ticking in the UI.
                 job.DownloadSpeedBytesPerSecond = 0;
+
+                // Resolve destination health before enqueueing upload so an unhealthy profile
+                // fails over immediately or terminates without burning Hangfire retries.
+                var route = await uploadRoutingService.ResolveTargetAsync(job, job.TotalBytes, CancellationToken.None);
+                if (!route.HasTarget)
+                {
+                    var message = route.Message ?? "No healthy storage destination is available for this upload.";
+                    Logger.LogError("{LogPrefix} No healthy destination for Job {JobId}. {Message}", LogPrefix, job.Id, message);
+
+                    job.CompletedAt = DateTime.UtcNow;
+                    await JobStatusService.TransitionJobStatusAsync(
+                        job,
+                        JobStatus.UPLOAD_FAILED,
+                        StatusChangeSource.System,
+                        message,
+                        new { storageRoutingFailed = true, profileId = job.StorageProfileId });
+                    return;
+                }
+
+                if (route.Rerouted)
+                {
+                    Logger.LogWarning("{LogPrefix} Job {JobId} rerouted before upload dispatch | {Message}", LogPrefix, job.Id, route.Message);
+                }
+
+                var providerType = job.StorageProfile?.ProviderType ?? StorageProviderType.GoogleDrive;
+                var storageHandler = jobHandlerFactory.GetStorageProviderHandler(providerType)
+                    ?? throw new NotSupportedException($"No upload handler for provider: {providerType}");
+
+                var uploadHangfireId = storageHandler.EnqueueUploadJob(job.Id, backgroundJobClient);
+
+                job.HangfireJobId = uploadHangfireId;
+                job.HangfireUploadJobId = uploadHangfireId;
+                job.CurrentState = $"Queued for {providerType} Upload";
+                job.LastHeartbeat = DateTime.UtcNow;
 
                 await JobStatusService.TransitionJobStatusAsync(
                     job,
                     JobStatus.PENDING_UPLOAD,
                     StatusChangeSource.Worker,
-                    metadata: new { bytesDownloaded = job.BytesDownloaded, storageProvider = job.StorageProfile?.ProviderType.ToString() });
+                    metadata: new { bytesDownloaded = job.BytesDownloaded, storageProvider = providerType.ToString(), hangfireJobId = uploadHangfireId });
 
-                Logger.LogInformation("{LogPrefix} Publishing to upload stream | JobId: {JobId} | Provider: {Provider}",
-                    LogPrefix, job.Id, job.StorageProfile?.ProviderType);
-
-                // Publish to upload stream for Google Drive worker (sync will be triggered after upload completes)
-                var uploadStreamKey = GetUploadStreamKey(job.StorageProfile?.ProviderType ?? StorageProviderType.GoogleDrive);
-                await redisStreamService.PublishAsync(uploadStreamKey, new Dictionary<string, string>
-                {
-                    { "jobId", job.Id.ToString() },
-                    { "downloadPath", job.DownloadPath ?? string.Empty },
-                    { "storageProfileId", job.StorageProfileId.ToString() },
-                    { "userId", job.UserId.ToString() },
-                    { "createdAt", DateTime.UtcNow.ToString("O") }
-                });
-
-                Logger.LogInformation("{LogPrefix} Published to upload stream | JobId: {JobId} | Stream: {Stream}",
-                    LogPrefix, job.Id, uploadStreamKey);
+                Logger.LogInformation("{LogPrefix} Enqueued upload job | JobId: {JobId} | Provider: {Provider} | HangfireJobId: {HfId}",
+                    LogPrefix, job.Id, providerType, uploadHangfireId);
             }
             catch (Exception ex)
             {
                 Logger.LogError(ex, "{LogPrefix} Failed during download completion | JobId: {JobId} | ExceptionType: {ExceptionType}",
                     LogPrefix, job.Id, ex.GetType().Name);
 
-                // Let base class UserJobBase.ExecuteAsync handle the status transition
-                // to avoid duplicate timeline entries
                 throw;
             }
-        }
-
-        private static string GetUploadStreamKey(StorageProviderType providerType)
-        {
-            var providerName = providerType.ToString().ToLowerInvariant();
-            return $"uploads:{providerName}:stream";
         }
 
         /// <summary>

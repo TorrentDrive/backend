@@ -5,7 +5,6 @@ using TorrenClou.Core.DTOs.Jobs;
 using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Enums;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
 
 namespace TorrenClou.Infrastructure.Services
 {
@@ -119,10 +118,9 @@ namespace TorrenClou.Infrastructure.Services
         /// <inheritdoc />
         public async Task<IReadOnlyList<JobTimelineEntryDto>> GetJobTimelineAsync(int jobId)
         {
-            var spec = new BaseSpecification<JobStatusHistory>(h => h.JobId == jobId);
-            spec.AddOrderBy(h => h.ChangedAt);
-
-            var historyEntries = await unitOfWork.Repository<JobStatusHistory>().ListAsync(spec);
+            var historyEntries = await unitOfWork.Repository<JobStatusHistory>().ListAsync(
+                criteria: h => h.JobId == jobId,
+                orderBy: q => q.OrderBy(h => h.ChangedAt));
 
             return MapToJobTimelineEntries(historyEntries);
         }
@@ -130,9 +128,12 @@ namespace TorrenClou.Infrastructure.Services
         /// <inheritdoc />
         public async Task<PaginatedResult<JobTimelineEntryDto>> GetJobTimelinePaginatedAsync(int jobId, int pageNumber, int pageSize)
         {
-            var spec = new JobTimelineSpecification(jobId, pageNumber, pageSize);
             var totalCount = await unitOfWork.Repository<JobStatusHistory>().CountAsync(h => h.JobId == jobId);
-            var historyEntries = await unitOfWork.Repository<JobStatusHistory>().ListAsync(spec);
+            var historyEntries = await unitOfWork.Repository<JobStatusHistory>().ListAsync(
+                criteria: h => h.JobId == jobId,
+                orderBy: q => q.OrderBy(h => h.ChangedAt),
+                skip: (pageNumber - 1) * pageSize,
+                take: pageSize);
 
             return new PaginatedResult<JobTimelineEntryDto>
             {

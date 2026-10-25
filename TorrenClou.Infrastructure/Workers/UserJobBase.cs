@@ -2,7 +2,7 @@ using Microsoft.Extensions.Logging;
 using TorrenClou.Core.Entities.Jobs;
 using TorrenClou.Core.Enums;
 using TorrenClou.Core.Interfaces;
-using TorrenClou.Core.Specifications;
+using System.Linq.Expressions;
 
 namespace TorrenClou.Infrastructure.Workers
 {
@@ -94,10 +94,9 @@ namespace TorrenClou.Infrastructure.Workers
         protected abstract Task ExecuteCoreAsync(UserJob job, CancellationToken cancellationToken);
 
         /// <summary>
-        /// Configure the specification with job-specific includes.
-        /// Override in derived classes to add related entities.
+        /// Navigation properties to include when loading the job.
         /// </summary>
-        protected abstract void ConfigureSpecification(BaseSpecification<UserJob> spec);
+        protected virtual Expression<Func<UserJob, object?>>[] GetIncludes() => [];
 
         /// <summary>
         /// Hook for cleanup when job is cancelled. Override for specific cleanup logic.
@@ -120,10 +119,7 @@ namespace TorrenClou.Infrastructure.Workers
         /// </summary>
         protected async Task<UserJob?> LoadJobAsync(int jobId)
         {
-            var spec = new BaseSpecification<UserJob>(j => j.Id == jobId);
-            ConfigureSpecification(spec);
-
-            var job = await UnitOfWork.Repository<UserJob>().GetEntityWithSpec(spec);
+            var job = await UnitOfWork.Repository<UserJob>().FirstOrDefaultAsync(j => j.Id == jobId, GetIncludes());
 
             if (job == null)
             {
