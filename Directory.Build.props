@@ -11,7 +11,7 @@
     line, so do not remove it or reformat that element onto several lines.
   -->
   <PropertyGroup>
-    <Version>2.0.1</Version> <!-- x-release-please-version -->
+    <Version>2.1.0</Version> <!-- x-release-please-version -->
     <Product>TorrentDrive</Product>
     <Company>TorrentDrive</Company>
     <Authors>TorrentDrive Contributors</Authors>
