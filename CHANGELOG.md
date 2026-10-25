@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.1] - 2026-10-25
+
+* ci: simplify CI/CD pipeline with direct automatic SemVer releases on main (ec98bcf)
+
 ## [2.1.0](https://github.com/TorrenClou/backend/compare/v2.0.1...v2.1.0) (2026-10-25)
 
 
