@@ -7,11 +7,10 @@
     this, no project set <Version>, so every assembly reported 1.0.0.0 and the
     version surfaced at /api/health/ready was a default rather than a fact.
 
-    Release Please owns the number below. The marker comment is how it finds the
-    line, so do not remove it or reformat that element onto several lines.
+    CI stamps and updates <Version> automatically on every release to main.
   -->
   <PropertyGroup>
-    <Version>2.1.0</Version> <!-- x-release-please-version -->
+    <Version>2.1.0</Version>
     <Product>TorrentDrive</Product>
     <Company>TorrentDrive</Company>
     <Authors>TorrentDrive Contributors</Authors>

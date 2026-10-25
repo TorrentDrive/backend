@@ -4,16 +4,9 @@ on:
   push:
     branches:
       - main
-      - master
-    # Fires only for a tag pushed by a human. Release Please tags with
-    # GITHUB_TOKEN, and GitHub does not start runs from that token's events —
-    # see the tag-release job for how automated releases get their semver tags.
-    tags:
-      - "v*"
   pull_request:
     branches:
       - main
-      - master
   workflow_dispatch:
 
 concurrency:
@@ -25,17 +18,69 @@ env:
   IMAGE_PREFIX: ${{ github.repository }}
 
 jobs:
-  # Compile before building any image. Previously the only compilation happened
-  # inside the Docker build stages, so a break was reported four times over as
-  # four failed image builds instead of once, with the compiler output buried.
-  # There is no test project yet; when one lands, it runs here.
   compile:
     name: Compile
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      major_minor: ${{ steps.version.outputs.major_minor }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-dotnet@v4
+      - name: Determine next version
+        id: version
+        run: |
+          set -euo pipefail
+
+          props_version=$(sed -n 's|.*<Version>\([^<]*\)</Version>.*|\1|p' Directory.Build.props | head -n1 | tr -d '[:space:]')
+          [ -z "$props_version" ] && props_version="2.1.0"
+
+          latest_tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          tag_version="${latest_tag#v}"
+
+          if [ -n "$tag_version" ]; then
+            base_version=$(printf '%s\n%s\n' "$props_version" "$tag_version" | sort -V | tail -n1)
+          else
+            base_version="$props_version"
+          fi
+
+          IFS='.' read -r major minor patch <<< "$base_version"
+
+          if [ -n "$latest_tag" ] && git merge-base --is-ancestor "$latest_tag" HEAD 2>/dev/null; then
+            range="${latest_tag}..HEAD"
+          else
+            range="HEAD~1..HEAD"
+          fi
+
+          commits_full=$(git log $range --format="%s%n%b" 2>/dev/null || git log -1 --format="%s%n%b")
+          commits_subj=$(git log $range --format="%s" 2>/dev/null || git log -1 --format="%s")
+
+          if echo "$commits_full" | grep -qE '(BREAKING CHANGE|^[a-z]+(\([^)]+\))?!:)'; then
+            major=$((major + 1))
+            minor=0
+            patch=0
+          elif echo "$commits_subj" | grep -qE '^feat(\([^)]+\))?:'; then
+            minor=$((minor + 1))
+            patch=0
+          else
+            patch=$((patch + 1))
+          fi
+
+          version="${major}.${minor}.${patch}"
+          major_minor="${major}.${minor}"
+
+          sed -i "s|<Version>[^<]*</Version>|<Version>${version}</Version>|" Directory.Build.props
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "major_minor=${major_minor}" >> "$GITHUB_OUTPUT"
+          echo "Computed next version: ${version} (base: ${base_version}, latest tag: ${latest_tag:-none})"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "9.0.x"
 
@@ -45,9 +90,6 @@ jobs:
       - name: Build
         run: dotnet build TorrentDrive.sln -c Release --no-restore
 
-      # Generated from the annotated option types rather than written by hand.
-      # Running it on every build means a change to the configuration surface
-      # cannot pass CI while silently failing to generate.
       - name: Export the configuration schema
         run: |
           set -euo pipefail
@@ -66,6 +108,7 @@ jobs:
   images:
     name: ${{ matrix.service.name }}
     needs: compile
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -84,10 +127,6 @@ jobs:
           - name: gdrive-worker
             context: .
             dockerfile: TorrentDrive.GoogleDrive.Worker/Dockerfile
-          # s3-worker was missing from this matrix, so its image was never
-          # published even though TorrentDrive.S3.Worker/Dockerfile has always
-          # existed. Any deployment splitting the workers into separate
-          # services had no image to pull.
           - name: s3-worker
             context: .
             dockerfile: TorrentDrive.S3.Worker/Dockerfile
@@ -96,9 +135,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Needed for the arm64 runtime stage. The SDK stage is pinned to
-      # $BUILDPLATFORM in every Dockerfile, so .NET itself never compiles under
-      # emulation — only the handful of apt/useradd steps in the runtime stage do.
+      - name: Stamp release version into Directory.Build.props
+        run: |
+          sed -i "s|<Version>[^<]*</Version>|<Version>${{ needs.compile.outputs.version }}</Version>|" Directory.Build.props
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -118,18 +158,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }}
-          # type=semver only emits on a tag, and only fires for a tag pushed by a
-          # human: GitHub does not start workflow runs from events raised by
-          # GITHUB_TOKEN, which is what Release Please tags with. The tag-release
-          # job below is what actually applies semver tags to an automated
-          # release; these rules cover the manual case.
           tags: |
             type=ref,event=branch
             type=ref,event=pr
             type=sha,format=long
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.compile.outputs.version }},enable={{is_default_branch}}
+            type=raw,value=${{ needs.compile.outputs.major_minor }},enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=TorrentDrive ${{ matrix.service.name }}
             org.opencontainers.image.description=TorrentDrive ${{ matrix.service.name }} — self-hosted torrent-to-cloud
@@ -153,156 +188,132 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
           platforms: linux/amd64,linux/arm64
 
-  # Optional, and provider-agnostic.
-  #
-  # This used to POST to a hardcoded Dokploy webhook and fail the whole workflow
-  # when the secret was missing or the response was not exactly 200. It had been
-  # failing every push to main with "Branch Not Match" (301) — a Dokploy-side
-  # configuration mismatch that made a perfectly good build look broken.
-  #
-  # TorrentDrive is not tied to one host. It publishes images; Dokploy, Coolify,
-  # Railway, Render or a plain docker host all pull them, and most of those
-  # redeploy on their own. So this is now a hook for whoever wants one, named
-  # after nothing in particular.
-  #
-  # It never fails the workflow. By the time it runs the images are already
-  # published and the build genuinely succeeded — a webhook that is misconfigured
-  # or briefly down is not a reason to mark that build red, and re-running the
-  # build would not fix it either.
-  notify-deploy:
-    needs: images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Notify the deploy webhook, if one is configured
-        env:
-          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
-        run: |
-          set -uo pipefail
-
-          if [ -z "${DEPLOY_WEBHOOK_URL}" ]; then
-            echo "No DEPLOY_WEBHOOK_URL secret set - nothing to notify."
-            echo "Images are published; most platforms redeploy by pulling them."
-            exit 0
-          fi
-
-          status=$(curl -sS -L -o /tmp/deploy.log -w '%{http_code}'             -X POST "${DEPLOY_WEBHOOK_URL}" || echo 000)
-          echo "Webhook responded ${status}"
-          cat /tmp/deploy.log 2>/dev/null || true
-
-          case "${status}" in
-            2*) echo "Deploy triggered." ;;
-            *)  echo "::warning::Deploy webhook returned ${status}. The images published successfully; only the redeploy notification failed. Check the webhook URL and, if the host filters by branch, that it accepts main." ;;
-          esac
-
-  # Was its own workflow on the same push trigger, so it raced this one: the
-  # combined image could be built from a commit whose own images had just failed
-  # to build. Gated on images now, so the all-in-one is only rebuilt from a
-  # commit that actually compiles.
-  dispatch-combined:
-    needs: images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger combined image build
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.DEPLOY_PAT }}
-          repository: TorrentDrive/deploy
-          event-type: build-combined
-          client-payload: |
-            {
-              "repository": "${{ github.repository }}",
-              "sha": "${{ github.sha }}",
-              "ref": "${{ github.ref }}",
-              "actor": "${{ github.actor }}"
-            }
-
-  # Applies the semver tags to a release build.
-  #
-  # The tag trigger above cannot do this on its own. Release Please creates its
-  # tag with GITHUB_TOKEN, and GitHub deliberately does not start workflow runs
-  # from events raised by that token, so `on: push: tags` never fires for an
-  # automated release. (It does fire for a tag pushed by a human, which is why
-  # the trigger stays.)
-  #
-  # Instead this runs in the same workflow as the build it is tagging: a release
-  # commit is a push to main like any other, so the images already exist by the
-  # time this job starts. It re-tags them by digest with `imagetools create` —
-  # no rebuild, and the semver tag points at exactly the artifact that was
-  # tested.
-  tag-release:
-    needs: images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  release:
+    name: Release v${{ needs.compile.outputs.version }}
+    needs: [compile, images]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(release):')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Is this a release commit?
-        id: release
-        run: |
-          set -euo pipefail
-
-          # Release Please touches the manifest and nothing else does.
-          if git diff --name-only HEAD^ HEAD | grep -qx '.release-please-manifest.json'; then
-            version=$(jq -r '.["."]' .release-please-manifest.json)
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            echo "major_minor=${version%.*}" >> "$GITHUB_OUTPUT"
-            echo "Release commit for ${version}"
-          else
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-            echo "Not a release commit; nothing to tag."
-          fi
-
-      - name: Log in to GitHub Container Registry
-        if: steps.release.outputs.is_release == 'true'
-        uses: docker/login-action@v3
+      - name: Download configuration schema artifact
+        uses: actions/download-artifact@v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          name: config-schema
+          path: .
 
-      # Tags first. This used to run after the schema upload, and when that
-      # upload failed with a 403 the semver tags were skipped entirely — so
-      # v2.0.0 released with no :2.0.0 images. An optional documentation asset
-      # must not be able to block the images.
-      - name: Apply semver tags
-        if: steps.release.outputs.is_release == 'true'
-        run: |
-          set -euo pipefail
-          version="${{ steps.release.outputs.version }}"
-          major_minor="${{ steps.release.outputs.major_minor }}"
-          prefix=$(echo "${{ env.IMAGE_PREFIX }}" | tr "[:upper:]" "[:lower:]")
-          for service in api worker gdrive-worker s3-worker; do
-            # IMAGE_PREFIX is github.repository, which preserves the owner's
-            # casing, and Docker rejects an uppercase repository name.
-            image="${{ env.REGISTRY }}/${prefix}/${service}"
-            source_tag="sha-${{ github.sha }}"
-            echo "Tagging ${image} as ${version} and ${major_minor}"
-            docker buildx imagetools create               --tag "${image}:${version}"               --tag "${image}:${major_minor}"               "${image}:${source_tag}"
-          done
-
-      - uses: actions/setup-dotnet@v4
-        if: steps.release.outputs.is_release == 'true'
-        with:
-          dotnet-version: "9.0.x"
-
-      # Best effort, and deliberately after the tags. The docs site falls back
-      # to the previous release's schema if this is missing, which is a much
-      # smaller problem than a release with no versioned images.
-      - name: Attach the configuration schema to the release
-        if: steps.release.outputs.is_release == 'true' && github.event_name == 'push'
-        continue-on-error: true
+      - name: Bump version, tag, and create GitHub Release
+        id: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          dotnet build TorrentDrive.sln -c Release
-          dotnet TorrentDrive.API/bin/Release/net9.0/TorrentDrive.API.dll --dump-config-schema > config-schema.json
-          gh release upload "v${{ steps.release.outputs.version }}" config-schema.json --clobber
+          version="${{ needs.compile.outputs.version }}"
+          today=$(date -u +%Y-%m-%d)
+
+          latest_tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          if [ -n "$latest_tag" ] && git merge-base --is-ancestor "$latest_tag" HEAD 2>/dev/null; then
+            notes=$(git log "${latest_tag}..HEAD" --no-merges --pretty=format:"* %s (%h)" | grep -v '^. chore(release):' || true)
+          else
+            notes=$(git log -1 --pretty=format:"* %s (%h)")
+          fi
+          [ -z "$notes" ] && notes="* Maintenance release (${GITHUB_SHA:0:7})"
+
+          sed -i "s|<Version>[^<]*</Version>|<Version>${version}</Version>|" Directory.Build.props
+
+          {
+            echo "# Changelog"
+            echo ""
+            echo "## [${version}] - ${today}"
+            echo ""
+            echo "${notes}"
+            echo ""
+            if [ -f CHANGELOG.md ]; then
+              tr -d '\r' < CHANGELOG.md | sed '1{/^# Changelog/d;}' | sed '/./,$!d'
+            fi
+          } > CHANGELOG.md.tmp
+          mv CHANGELOG.md.tmp CHANGELOG.md
+
+          printf '%s\n' "$notes" > /tmp/release-notes.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add Directory.Build.props CHANGELOG.md
+          git commit -m "chore(release): v${version} [skip ci]"
+          git pull --rebase origin main
+          release_sha=$(git rev-parse HEAD)
+          git push origin HEAD:main
+
+          git tag -f "v${version}" "$release_sha"
+          git push -f origin "v${version}"
+
+          echo "release_sha=${release_sha}" >> "$GITHUB_OUTPUT"
+
+          if ! gh release create "v${version}" config-schema.json \
+            --target "$release_sha" \
+            --title "v${version}" \
+            --notes-file /tmp/release-notes.md; then
+            gh release upload "v${version}" config-schema.json --clobber
+          fi
+
+      - name: Notify the deploy webhook, if configured
+        env:
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+        run: |
+          set -uo pipefail
+          if [ -z "${DEPLOY_WEBHOOK_URL}" ]; then
+            echo "No DEPLOY_WEBHOOK_URL secret set - nothing to notify."
+            exit 0
+          fi
+
+          status=$(curl -sS -L -o /tmp/deploy.log -w '%{http_code}' -X POST "${DEPLOY_WEBHOOK_URL}" || echo 000)
+          echo "Webhook responded ${status}"
+          cat /tmp/deploy.log 2>/dev/null || true
+
+          case "${status}" in
+            2*) echo "Deploy triggered." ;;
+            *)  echo "::warning::Deploy webhook returned ${status}. The images and release published successfully; only the redeploy notification failed." ;;
+          esac
+
+      - name: Dispatch downstream builds (deploy & website)
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_PAT }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::DEPLOY_PAT secret is not configured; skipping cross-repo repository_dispatch."
+            exit 0
+          fi
+
+          version="${{ needs.compile.outputs.version }}"
+          sha="${{ steps.publish.outputs.release_sha }}"
+
+          if gh api repos/TorrentDrive/deploy/dispatches \
+            --method POST \
+            -f event_type="build-combined" \
+            -f "client_payload[repository]=${GITHUB_REPOSITORY}" \
+            -f "client_payload[sha]=${sha}" \
+            -f "client_payload[ref]=v${version}" \
+            -f "client_payload[actor]=${GITHUB_ACTOR}"; then
+            echo "Dispatched build-combined to TorrentDrive/deploy for v${version} (${sha})."
+          else
+            echo "::warning::Failed to dispatch build-combined to TorrentDrive/deploy. Check DEPLOY_PAT permissions."
+          fi
+
+          if gh api repos/TorrentDrive/website/dispatches \
+            --method POST \
+            -f event_type="config-schema" \
+            -f "client_payload[tag]=v${version}" \
+            -f "client_payload[sha]=${sha}"; then
+            echo "Dispatched config-schema to TorrentDrive/website for v${version}."
+          else
+            echo "::warning::Failed to dispatch config-schema to TorrentDrive/website. Check DEPLOY_PAT permissions."
+          fi
