@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,6 +24,35 @@ namespace TorrentDrive.Application.Services
         IStorageProfileHealthService storageHealthService,
         ILogger<JobService> logger) : IJobService
     {
+        private const long OneGiB = 1L * 1024 * 1024 * 1024;
+        private const long TenGiB = 10L * 1024 * 1024 * 1024;
+        private const long FiftyGiB = 50L * 1024 * 1024 * 1024;
+
+        private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".mkv", ".mp4", ".avi", ".mov", ".webm", ".m4v", ".ts"
+        };
+
+        private static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".mp3", ".flac", ".wav", ".aac", ".ogg", ".m4a"
+        };
+
+        private static readonly HashSet<string> ArchiveExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".zip", ".rar", ".7z", ".tar", ".gz", ".iso"
+        };
+
+        private static readonly HashSet<string> DocumentExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".pdf", ".epub", ".mobi", ".doc", ".docx", ".txt", ".md"
+        };
+
+        private static readonly HashSet<string> SoftwareExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".exe", ".msi", ".dmg", ".deb", ".rpm", ".apk", ".appimage"
+        };
+
         public async Task<JobCreationResult> CreateAndDispatchJobAsync(int torrentFileId, int userId, string[]? selectedFiles, int storageProfileId)
         {
             logger.LogInformation("Create and dispatch job requested | TorrentFileId: {TorrentFileId} | UserId: {UserId}", torrentFileId, userId);
@@ -47,7 +77,8 @@ namespace TorrentDrive.Application.Services
                 Status = JobStatus.QUEUED,
                 Type = defaultJobType,
                 RequestFileId = torrentFileId,
-                SelectedFilePaths = selectedFiles
+                SelectedFilePaths = selectedFiles,
+                TotalBytes = torrentFile.FileSize
             };
 
             unitOfWork.Repository<UserJob>().Add(job);
@@ -173,51 +204,170 @@ namespace TorrentDrive.Application.Services
             };
         }
 
-        public async Task<PaginatedResult<JobDto>> GetUserJobsAsync(int userId, int pageNumber, int pageSize, JobStatus? status = null)
+        public Task<PaginatedResult<JobDto>> GetUserJobsAsync(int userId, int pageNumber, int pageSize, JobStatus? status = null)
         {
-            logger.LogDebug("Get user jobs requested | UserId: {UserId} | Page: {PageNumber} | PageSize: {PageSize} | Status: {Status}", userId, pageNumber, pageSize, status);
+            return GetUserJobsAsync(userId, new JobQueryParametersDto
+            {
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                Status = status
+            });
+        }
 
-            var jobs = await unitOfWork.Repository<UserJob>().ListAsync(
-                criteria: job => job.UserId == userId && (status == null || job.Status == status),
-                orderBy: q => q.OrderByDescending(job => job.CreatedAt),
-                skip: (pageNumber - 1) * pageSize,
-                take: pageSize,
+        public async Task<PaginatedResult<JobDto>> GetUserJobsAsync(int userId, JobQueryParametersDto query)
+        {
+            var pageNumber = Math.Max(1, query.PageNumber);
+            var pageSize = Math.Clamp(query.PageSize, 1, 200);
+
+            logger.LogDebug(
+                "Get user jobs requested | UserId: {UserId} | Page: {PageNumber} | PageSize: {PageSize} | Phase: {Phase} | Status: {Status} | Search: {Search}",
+                userId, pageNumber, pageSize, query.Phase, query.Status, query.EffectiveSearch);
+
+            var allJobs = await unitOfWork.Repository<UserJob>().ListAsync(
+                criteria: job => job.UserId == userId,
+                orderBy: null,
+                skip: null,
+                take: null,
                 job => job.StorageProfile,
                 job => job.RequestFile);
-            var totalCount = await unitOfWork.Repository<UserJob>().CountAsync(
-                job => job.UserId == userId && (status == null || job.Status == status));
 
-            var items = jobs.Select(job => new JobDto
+            Dictionary<int, string>? profileNames = null;
+            if (allJobs.Any(j => j.OriginalStorageProfileId.HasValue))
             {
-                Id = job.Id,
-                StorageProfileId = job.StorageProfileId,
-                StorageProfileName = job.StorageProfile?.ProfileName,
-                OriginalStorageProfileId = job.OriginalStorageProfileId,
-                AllowStorageFailover = job.AllowStorageFailover,
-                FailoverAttempts = job.FailoverAttempts,
-                LastRouteReason = job.LastRouteReason.ToString(),
-                Status = job.Status,
-                Type = job.Type.ToString(),
-                RequestFileId = job.RequestFileId,
-                RequestFileName = job.RequestFile?.FileName,
-                ErrorMessage = job.ErrorMessage,
-                CurrentState = job.CurrentState,
-                StartedAt = job.StartedAt,
-                CompletedAt = job.CompletedAt,
-                LastHeartbeat = job.LastHeartbeat,
-                BytesDownloaded = job.BytesDownloaded,
-                BytesUploaded = job.BytesUploaded,
-                TotalBytes = job.TotalBytes,
-                DownloadSpeedBytesPerSecond = job.DownloadSpeedBytesPerSecond,
-                UploadSpeedBytesPerSecond = job.UploadSpeedBytesPerSecond,
-                SelectedFilePaths = job.SelectedFilePaths,
-                CreatedAt = job.CreatedAt,
-                UpdatedAt = job.UpdatedAt
-            }).ToList();
+                var userProfiles = await unitOfWork.Repository<UserStorageProfile>().ListAsync(p => p.UserId == userId);
+                profileNames = userProfiles.ToDictionary(p => p.Id, p => p.ProfileName);
+            }
+
+            IEnumerable<UserJob> filtered = allJobs;
+
+            // 1. Single status filter
+            if (query.Status.HasValue)
+            {
+                var targetStatus = query.Status.Value;
+                filtered = filtered.Where(j => j.Status == targetStatus);
+            }
+
+            // 2. Comma-separated statuses filter
+            if (!string.IsNullOrWhiteSpace(query.Statuses))
+            {
+                var parsedStatuses = ParseStatusesList(query.Statuses);
+                if (parsedStatuses.Count > 0)
+                {
+                    filtered = filtered.Where(j => parsedStatuses.Contains(j.Status));
+                }
+            }
+
+            // 3. Phase filter
+            if (!string.IsNullOrWhiteSpace(query.Phase))
+            {
+                filtered = ApplyPhaseFilter(filtered, query.Phase.Trim());
+            }
+
+            // 4. Provider filter
+            if (!string.IsNullOrWhiteSpace(query.Provider))
+            {
+                var providerType = ParseProviderType(query.Provider);
+                if (providerType.HasValue)
+                {
+                    filtered = filtered.Where(j => j.StorageProfile != null && j.StorageProfile.ProviderType == providerType.Value);
+                }
+            }
+
+            // 5. StorageProfileId filter
+            if (query.StorageProfileId.HasValue)
+            {
+                var targetProfileId = query.StorageProfileId.Value;
+                filtered = filtered.Where(j => j.StorageProfileId == targetProfileId);
+            }
+
+            // 6. Media Category filter
+            if (!string.IsNullOrWhiteSpace(query.Category))
+            {
+                var categories = query.Category
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(c => c.ToLowerInvariant())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                if (categories.Count > 0)
+                {
+                    filtered = filtered.Where(j => categories.Contains(ComputeMediaCategory(j)));
+                }
+            }
+
+            // 7. SizeBucket filter
+            if (!string.IsNullOrWhiteSpace(query.SizeBucket))
+            {
+                var bucket = NormalizeSizeBucket(query.SizeBucket);
+                if (bucket != null)
+                {
+                    filtered = filtered.Where(j => ComputeSizeBucket(GetEffectiveTotalBytes(j)) == bucket);
+                }
+            }
+
+            // 8. DateRange filter
+            if (!string.IsNullOrWhiteSpace(query.DateRange))
+            {
+                var cutoff = ParseDateRangeCutoff(query.DateRange);
+                if (cutoff.HasValue)
+                {
+                    filtered = filtered.Where(j => j.CreatedAt >= cutoff.Value);
+                }
+            }
+
+            // 9. Boolean facet filters
+            if (query.IsPinned.HasValue)
+            {
+                var isPinned = query.IsPinned.Value;
+                filtered = filtered.Where(j => (!j.AllowStorageFailover) == isPinned);
+            }
+
+            if (query.WasRerouted.HasValue)
+            {
+                var wasRerouted = query.WasRerouted.Value;
+                filtered = filtered.Where(j => ComputeWasRerouted(j) == wasRerouted);
+            }
+
+            if (query.IsStalled.HasValue)
+            {
+                var isStalled = query.IsStalled.Value;
+                filtered = filtered.Where(j => ComputeIsStalled(j) == isStalled);
+            }
+
+            if (query.IsSelective.HasValue)
+            {
+                var isSelective = query.IsSelective.Value;
+                filtered = filtered.Where(j => ComputeIsSelective(j) == isSelective);
+            }
+
+            if (query.HasError.HasValue)
+            {
+                var hasError = query.HasError.Value;
+                filtered = filtered.Where(j => (!string.IsNullOrEmpty(j.ErrorMessage)) == hasError);
+            }
+
+            // 10. Token-aware search & free-text filter
+            var effectiveSearch = query.EffectiveSearch;
+            if (!string.IsNullOrWhiteSpace(effectiveSearch))
+            {
+                filtered = ApplySearchTokensAndText(filtered, effectiveSearch);
+            }
+
+            var filteredList = filtered.ToList();
+            var totalCount = filteredList.Count;
+
+            // 11. Sorting
+            var sorted = ApplySorting(filteredList, query.SortBy, query.SortDir);
+
+            // 12. Pagination & Mapping
+            var pagedItems = sorted
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(job => MapToJobDto(job, profileNames))
+                .ToList();
 
             return new PaginatedResult<JobDto>
             {
-                Items = items,
+                Items = pagedItems,
                 TotalCount = totalCount,
                 PageNumber = pageNumber,
                 PageSize = pageSize
@@ -241,46 +391,33 @@ namespace TorrentDrive.Application.Services
 
             var timeline = await jobStatusService.GetJobTimelineAsync(jobId);
 
-            var originalProfileName = job.OriginalStorageProfileId.HasValue
-                ? (await unitOfWork.Repository<UserStorageProfile>().GetByIdAsync(job.OriginalStorageProfileId.Value))?.ProfileName
-                : null;
-
-            return new JobDto
+            Dictionary<int, string>? profileNames = null;
+            if (job.OriginalStorageProfileId.HasValue)
             {
-                Id = job.Id,
-                StorageProfileId = job.StorageProfileId,
-                StorageProfileName = job.StorageProfile?.ProfileName,
-                OriginalStorageProfileId = job.OriginalStorageProfileId,
-                OriginalStorageProfileName = originalProfileName,
-                AllowStorageFailover = job.AllowStorageFailover,
-                FailoverAttempts = job.FailoverAttempts,
-                LastRouteReason = job.LastRouteReason.ToString(),
-                Status = job.Status,
-                Type = job.Type.ToString(),
-                RequestFileId = job.RequestFileId,
-                RequestFileName = job.RequestFile?.FileName,
-                ErrorMessage = job.ErrorMessage,
-                CurrentState = job.CurrentState,
-                StartedAt = job.StartedAt,
-                CompletedAt = job.CompletedAt,
-                LastHeartbeat = job.LastHeartbeat,
-                BytesDownloaded = job.BytesDownloaded,
-                BytesUploaded = job.BytesUploaded,
-                TotalBytes = job.TotalBytes,
-                DownloadSpeedBytesPerSecond = job.DownloadSpeedBytesPerSecond,
-                UploadSpeedBytesPerSecond = job.UploadSpeedBytesPerSecond,
-                SelectedFilePaths = job.SelectedFilePaths,
-                CreatedAt = job.CreatedAt,
-                UpdatedAt = job.UpdatedAt,
-                Timeline = timeline.ToList()
-            };
+                var originalProfile = await unitOfWork.Repository<UserStorageProfile>().GetByIdAsync(job.OriginalStorageProfileId.Value);
+                if (originalProfile != null)
+                {
+                    profileNames = new Dictionary<int, string>
+                    {
+                        [originalProfile.Id] = originalProfile.ProfileName
+                    };
+                }
+            }
+
+            return MapToJobDto(job, profileNames, timeline.ToList());
         }
 
         public async Task<JobStatisticsDto> GetUserJobStatisticsAsync(int userId)
         {
             logger.LogDebug("Get user job statistics requested | UserId: {UserId}", userId);
 
-            var allJobs = await unitOfWork.Repository<UserJob>().ListAsync(job => job.UserId == userId);
+            var allJobs = await unitOfWork.Repository<UserJob>().ListAsync(
+                criteria: job => job.UserId == userId,
+                orderBy: null,
+                skip: null,
+                take: null,
+                job => job.StorageProfile,
+                job => job.RequestFile);
 
             var statistics = new JobStatisticsDto
             {
@@ -293,7 +430,21 @@ namespace TorrentDrive.Application.Services
                 PendingUploadJobs = allJobs.Count(j => j.Status == JobStatus.PENDING_UPLOAD),
                 UploadingJobs = allJobs.Count(j => j.Status == JobStatus.UPLOADING),
                 RetryingJobs = allJobs.Count(j => j.Status.IsRetrying()),
-                CancelledJobs = allJobs.Count(j => j.Status.IsCancelled())
+                CancelledJobs = allJobs.Count(j => j.Status.IsCancelled()),
+                PinnedJobs = allJobs.Count(j => !j.AllowStorageFailover),
+                ReroutedJobs = allJobs.Count(ComputeWasRerouted),
+                StalledJobs = allJobs.Count(ComputeIsStalled),
+                SelectiveJobs = allJobs.Count(ComputeIsSelective),
+                TotalBytesTransferred = allJobs.Sum(j =>
+                    j.Status == JobStatus.COMPLETED
+                        ? GetEffectiveTotalBytes(j)
+                        : Math.Max(j.BytesDownloaded, j.BytesUploaded)),
+                TotalDownloadSpeedBytesPerSecond = allJobs
+                    .Where(j => j.Status == JobStatus.DOWNLOADING)
+                    .Sum(j => j.DownloadSpeedBytesPerSecond),
+                TotalUploadSpeedBytesPerSecond = allJobs
+                    .Where(j => j.Status == JobStatus.UPLOADING)
+                    .Sum(j => j.UploadSpeedBytesPerSecond)
             };
 
             statistics.StatusFilters = allJobs
@@ -303,7 +454,126 @@ namespace TorrentDrive.Application.Services
                 .OrderByDescending(f => f.Count)
                 .ToList();
 
+            statistics.ProviderCounts = allJobs
+                .Where(j => j.StorageProfile != null)
+                .GroupBy(j => j.StorageProfile!.ProviderType.ToString())
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            statistics.CategoryCounts = allJobs
+                .GroupBy(ComputeMediaCategory)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            statistics.SizeBucketCounts = allJobs
+                .GroupBy(j => ComputeSizeBucket(GetEffectiveTotalBytes(j)))
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            statistics.ProfileCounts = allJobs
+                .GroupBy(j => j.StorageProfileId)
+                .Select(g =>
+                {
+                    var profile = g.FirstOrDefault(j => j.StorageProfile != null)?.StorageProfile;
+                    return new StorageProfileFacetDto
+                    {
+                        StorageProfileId = g.Key,
+                        ProfileName = profile?.ProfileName ?? $"Profile #{g.Key}",
+                        ProviderType = profile?.ProviderType.ToString() ?? string.Empty,
+                        Count = g.Count()
+                    };
+                })
+                .OrderByDescending(p => p.Count)
+                .ToList();
+
             return statistics;
+        }
+
+        public async Task<BatchJobActionResultDto> RetryFailedJobsAsync(int userId, BatchJobIdsRequestDto? request = null, UserRole? userRole = null)
+        {
+            List<int> targetJobIds;
+
+            if (request?.JobIds is { Count: > 0 })
+            {
+                targetJobIds = request.JobIds.Distinct().ToList();
+            }
+            else
+            {
+                var userJobs = await unitOfWork.Repository<UserJob>().ListAsync(j => j.UserId == userId);
+                targetJobIds = userJobs
+                    .Where(j => j.Status.IsFailed() && j.Status != JobStatus.CANCELLED)
+                    .Select(j => j.Id)
+                    .ToList();
+            }
+
+            logger.LogInformation(
+                "Batch retry failed jobs requested | UserId: {UserId} | Count: {Count} | TargetStorageProfileId: {TargetProfileId}",
+                userId, targetJobIds.Count, request?.TargetStorageProfileId);
+
+            var result = new BatchJobActionResultDto
+            {
+                TotalRequested = targetJobIds.Count
+            };
+
+            foreach (var jobId in targetJobIds)
+            {
+                try
+                {
+                    await RetryJobAsync(jobId, userId, userRole, request?.TargetStorageProfileId);
+                    result.SucceededJobIds.Add(jobId);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Batch retry failed for job | JobId: {JobId} | UserId: {UserId}", jobId, userId);
+                    result.Errors.Add($"Job #{jobId}: {ex.Message}");
+                }
+            }
+
+            result.SucceededCount = result.SucceededJobIds.Count;
+            result.FailedCount = result.Errors.Count;
+
+            return result;
+        }
+
+        public async Task<BatchJobActionResultDto> CancelJobsAsync(int userId, BatchJobIdsRequestDto request, UserRole? userRole = null)
+        {
+            List<int> targetJobIds;
+
+            if (request?.JobIds is { Count: > 0 })
+            {
+                targetJobIds = request.JobIds.Distinct().ToList();
+            }
+            else
+            {
+                var userJobs = await unitOfWork.Repository<UserJob>().ListAsync(j => j.UserId == userId);
+                targetJobIds = userJobs
+                    .Where(j => j.Status.IsCancellable())
+                    .Select(j => j.Id)
+                    .ToList();
+            }
+
+            logger.LogInformation("Batch cancel jobs requested | UserId: {UserId} | Count: {Count}", userId, targetJobIds.Count);
+
+            var result = new BatchJobActionResultDto
+            {
+                TotalRequested = targetJobIds.Count
+            };
+
+            foreach (var jobId in targetJobIds)
+            {
+                try
+                {
+                    await CancelJobAsync(jobId, userId, userRole);
+                    result.SucceededJobIds.Add(jobId);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Batch cancel failed for job | JobId: {JobId} | UserId: {UserId}", jobId, userId);
+                    result.Errors.Add($"Job #{jobId}: {ex.Message}");
+                }
+            }
+
+            result.SucceededCount = result.SucceededJobIds.Count;
+            result.FailedCount = result.Errors.Count;
+
+            return result;
         }
 
         public async Task<IReadOnlyList<UserJob>> GetActiveJobsByStorageProfileIdAsync(int storageProfileId)
@@ -431,6 +701,470 @@ namespace TorrentDrive.Application.Services
             }
 
             return await GetJobByIdAsync(userId, jobId, userRole);
+        }
+
+        // --- Mapping, Facet, Filtering & Sorting Helpers ---
+
+        private static JobDto MapToJobDto(
+            UserJob job,
+            IReadOnlyDictionary<int, string>? profileNames = null,
+            List<JobTimelineEntryDto>? timeline = null)
+        {
+            var totalFilesCount = job.RequestFile?.Files?.Length ?? 0;
+            var selectedFilesCount = job.SelectedFilePaths is { Length: > 0 }
+                ? job.SelectedFilePaths.Length
+                : totalFilesCount;
+
+            string? originalProfileName = null;
+            if (job.OriginalStorageProfileId.HasValue && profileNames != null)
+            {
+                profileNames.TryGetValue(job.OriginalStorageProfileId.Value, out originalProfileName);
+            }
+
+            return new JobDto
+            {
+                Id = job.Id,
+                StorageProfileId = job.StorageProfileId,
+                StorageProfileName = job.StorageProfile?.ProfileName,
+                StorageProviderType = job.StorageProfile?.ProviderType.ToString(),
+                OriginalStorageProfileId = job.OriginalStorageProfileId,
+                OriginalStorageProfileName = originalProfileName,
+                AllowStorageFailover = job.AllowStorageFailover,
+                FailoverAttempts = job.FailoverAttempts,
+                LastRouteReason = job.LastRouteReason.ToString(),
+                Status = job.Status,
+                Type = job.Type.ToString(),
+                RequestFileId = job.RequestFileId,
+                RequestFileName = job.RequestFile?.FileName,
+                InfoHash = job.RequestFile?.InfoHash,
+                TotalFilesCount = totalFilesCount,
+                SelectedFilesCount = selectedFilesCount,
+                MediaCategory = ComputeMediaCategory(job),
+                IsStalled = ComputeIsStalled(job),
+                ErrorMessage = job.ErrorMessage,
+                CurrentState = job.CurrentState,
+                StartedAt = job.StartedAt,
+                CompletedAt = job.CompletedAt,
+                LastHeartbeat = job.LastHeartbeat,
+                BytesDownloaded = job.BytesDownloaded,
+                BytesUploaded = job.BytesUploaded,
+                TotalBytes = GetEffectiveTotalBytes(job),
+                DownloadSpeedBytesPerSecond = job.DownloadSpeedBytesPerSecond,
+                UploadSpeedBytesPerSecond = job.UploadSpeedBytesPerSecond,
+                SelectedFilePaths = job.SelectedFilePaths,
+                CreatedAt = job.CreatedAt,
+                UpdatedAt = job.UpdatedAt,
+                Timeline = timeline ?? []
+            };
+        }
+
+        private static long GetEffectiveTotalBytes(UserJob job)
+        {
+            return job.TotalBytes > 0 ? job.TotalBytes : (job.RequestFile?.FileSize ?? 0);
+        }
+
+        private static bool ComputeWasRerouted(UserJob job)
+        {
+            return job.OriginalStorageProfileId.HasValue && job.OriginalStorageProfileId != job.StorageProfileId;
+        }
+
+        private static bool ComputeIsSelective(UserJob job)
+        {
+            var totalFilesCount = job.RequestFile?.Files?.Length ?? 0;
+            return job.SelectedFilePaths != null &&
+                   job.SelectedFilePaths.Length > 0 &&
+                   totalFilesCount > 0 &&
+                   job.SelectedFilePaths.Length < totalFilesCount;
+        }
+
+        private static bool ComputeIsStalled(UserJob job)
+        {
+            var now = DateTime.UtcNow;
+            if (job.Status == JobStatus.DOWNLOADING || job.Status == JobStatus.UPLOADING)
+            {
+                return (job.LastHeartbeat.HasValue && (now - job.LastHeartbeat.Value).TotalMinutes > 2) ||
+                       (!job.LastHeartbeat.HasValue && job.StartedAt.HasValue && (now - job.StartedAt.Value).TotalMinutes > 2);
+            }
+
+            if (job.Status == JobStatus.QUEUED || job.Status == JobStatus.PENDING_UPLOAD)
+            {
+                return (now - (job.UpdatedAt ?? job.CreatedAt)).TotalMinutes > 5;
+            }
+
+            return false;
+        }
+
+        private static string ComputeMediaCategory(UserJob job)
+        {
+            var candidates = new List<string>();
+            if (job.SelectedFilePaths is { Length: > 0 })
+            {
+                candidates.AddRange(job.SelectedFilePaths);
+            }
+            else if (job.RequestFile?.Files is { Length: > 0 })
+            {
+                candidates.AddRange(job.RequestFile.Files);
+            }
+
+            if (!string.IsNullOrWhiteSpace(job.RequestFile?.FileName))
+            {
+                candidates.Add(job.RequestFile.FileName);
+            }
+
+            var hasVideo = false;
+            var hasAudio = false;
+            var hasSoftware = false;
+            var hasArchive = false;
+            var hasDocument = false;
+
+            foreach (var path in candidates)
+            {
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                var ext = Path.GetExtension(path);
+                if (string.IsNullOrEmpty(ext)) continue;
+
+                if (VideoExtensions.Contains(ext)) hasVideo = true;
+                else if (AudioExtensions.Contains(ext)) hasAudio = true;
+                else if (SoftwareExtensions.Contains(ext)) hasSoftware = true;
+                else if (ArchiveExtensions.Contains(ext)) hasArchive = true;
+                else if (DocumentExtensions.Contains(ext)) hasDocument = true;
+            }
+
+            if (hasVideo) return "video";
+            if (hasAudio) return "audio";
+            if (hasSoftware) return "software";
+            if (hasArchive) return "archive";
+            if (hasDocument) return "document";
+            return "other";
+        }
+
+        private static string ComputeSizeBucket(long bytes)
+        {
+            if (bytes < OneGiB) return "small";
+            if (bytes < TenGiB) return "medium";
+            if (bytes < FiftyGiB) return "large";
+            return "xl";
+        }
+
+        private static string? NormalizeSizeBucket(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            return raw.Trim().ToLowerInvariant() switch
+            {
+                "small" or "<1gb" or "<1gib" or "xs" or "s" => "small",
+                "medium" or "1-10gb" or "1-10gib" or "m" => "medium",
+                "large" or "10-50gb" or "10-50gib" or "l" => "large",
+                "xl" or ">50gb" or ">=50gb" or ">50gib" or ">=50gib" => "xl",
+                _ => null
+            };
+        }
+
+        private static StorageProviderType? ParseProviderType(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            return raw.Trim().ToLowerInvariant() switch
+            {
+                "googledrive" or "gdrive" or "google" or "google_drive" or "google-drive" => StorageProviderType.GoogleDrive,
+                "s3" or "aws" or "r2" or "b2" or "minio" => StorageProviderType.S3,
+                _ => null
+            };
+        }
+
+        private static DateTime? ParseDateRangeCutoff(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            var now = DateTime.UtcNow;
+            return raw.Trim().ToLowerInvariant() switch
+            {
+                "today" or "24h" or "1d" => now.AddHours(-24),
+                "7d" or "week" => now.AddDays(-7),
+                "30d" or "month" => now.AddDays(-30),
+                "90d" or "quarter" => now.AddDays(-90),
+                _ => null
+            };
+        }
+
+        private static HashSet<JobStatus> ParseStatusesList(string rawStatuses)
+        {
+            var result = new HashSet<JobStatus>();
+            var tokens = rawStatuses.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var token in tokens)
+            {
+                if (Enum.TryParse<JobStatus>(token, ignoreCase: true, out var status))
+                {
+                    result.Add(status);
+                }
+            }
+            return result;
+        }
+
+        private static IEnumerable<UserJob> ApplyPhaseFilter(IEnumerable<UserJob> source, string phase)
+        {
+            return phase.ToLowerInvariant() switch
+            {
+                "all" => source,
+                "active" => source.Where(j => j.Status.IsActive()),
+                "downloading" => source.Where(j =>
+                    j.Status == JobStatus.DOWNLOADING ||
+                    j.Status == JobStatus.TORRENT_DOWNLOAD_RETRY),
+                "uploading" => source.Where(j =>
+                    j.Status == JobStatus.PENDING_UPLOAD ||
+                    j.Status == JobStatus.UPLOADING ||
+                    j.Status == JobStatus.UPLOAD_RETRY),
+                "queued" => source.Where(j =>
+                    j.Status == JobStatus.QUEUED ||
+                    j.Status == JobStatus.PENDING_UPLOAD),
+                "pending_upload" or "pendingupload" => source.Where(j => j.Status == JobStatus.PENDING_UPLOAD),
+                "retrying" => source.Where(j => j.Status.IsRetrying()),
+                "completed" => source.Where(j => j.Status.IsCompleted()),
+                "failed" => source.Where(j => j.Status.IsFailed()),
+                "cancelled" or "canceled" => source.Where(j => j.Status.IsCancelled()),
+                _ => Enum.TryParse<JobStatus>(phase, ignoreCase: true, out var parsedStatus)
+                    ? source.Where(j => j.Status == parsedStatus)
+                    : source
+            };
+        }
+
+        private static IEnumerable<UserJob> ApplySearchTokensAndText(IEnumerable<UserJob> source, string rawSearch)
+        {
+            var freeTextTerms = new List<string>();
+            var matches = Regex.Matches(rawSearch, @"([^\s""]+:""[^""]+""|""[^""]+""|\S+)");
+
+            foreach (Match match in matches)
+            {
+                var token = match.Value.Trim();
+                if (string.IsNullOrEmpty(token)) continue;
+
+                // #123 shorthand for job ID
+                if (token.StartsWith('#') && int.TryParse(token[1..], out var hashJobId))
+                {
+                    var targetId = hashJobId;
+                    source = source.Where(j => j.Id == targetId);
+                    continue;
+                }
+
+                var colonIndex = token.IndexOf(':');
+                if (colonIndex > 0 && colonIndex < token.Length - 1 && !token.StartsWith('"'))
+                {
+                    var key = token[..colonIndex].ToLowerInvariant();
+                    var val = token[(colonIndex + 1)..].Trim('"');
+
+                    switch (key)
+                    {
+                        case "id":
+                        case "job":
+                            if (int.TryParse(val.TrimStart('#'), out var parsedId))
+                            {
+                                var targetId = parsedId;
+                                source = source.Where(j => j.Id == targetId);
+                                continue;
+                            }
+                            break;
+
+                        case "provider":
+                            var provider = ParseProviderType(val);
+                            if (provider.HasValue)
+                            {
+                                var p = provider.Value;
+                                source = source.Where(j => j.StorageProfile != null && j.StorageProfile.ProviderType == p);
+                                continue;
+                            }
+                            break;
+
+                        case "phase":
+                            source = ApplyPhaseFilter(source, val);
+                            continue;
+
+                        case "status":
+                            if (Enum.TryParse<JobStatus>(val, ignoreCase: true, out var parsedStatus))
+                            {
+                                var st = parsedStatus;
+                                source = source.Where(j => j.Status == st);
+                                continue;
+                            }
+                            source = ApplyPhaseFilter(source, val);
+                            continue;
+
+                        case "is":
+                        case "has":
+                            var flag = val.ToLowerInvariant();
+                            source = flag switch
+                            {
+                                "pinned" => source.Where(j => !j.AllowStorageFailover),
+                                "rerouted" or "failover" => source.Where(ComputeWasRerouted),
+                                "stalled" or "stuck" => source.Where(ComputeIsStalled),
+                                "selective" or "partial" => source.Where(ComputeIsSelective),
+                                "retrying" or "retry" => source.Where(j => j.Status.IsRetrying()),
+                                "failed" or "error" => source.Where(j => j.Status.IsFailed() || !string.IsNullOrEmpty(j.ErrorMessage)),
+                                "active" => source.Where(j => j.Status.IsActive()),
+                                "completed" or "done" => source.Where(j => j.Status.IsCompleted()),
+                                "cancelled" or "canceled" => source.Where(j => j.Status.IsCancelled()),
+                                _ => source
+                            };
+                            continue;
+
+                        case "type":
+                        case "category":
+                            var cat = val.ToLowerInvariant();
+                            source = source.Where(j => string.Equals(ComputeMediaCategory(j), cat, StringComparison.OrdinalIgnoreCase));
+                            continue;
+
+                        case "ext":
+                            var ext = val.StartsWith('.') ? val : "." + val;
+                            source = source.Where(j => MatchesExtension(j, ext));
+                            continue;
+
+                        case "size":
+                            var bucket = NormalizeSizeBucket(val);
+                            if (bucket != null)
+                            {
+                                var b = bucket;
+                                source = source.Where(j => ComputeSizeBucket(GetEffectiveTotalBytes(j)) == b);
+                                continue;
+                            }
+                            break;
+                    }
+                }
+
+                var unquoted = token.Trim('"');
+                if (!string.IsNullOrWhiteSpace(unquoted))
+                {
+                    freeTextTerms.Add(unquoted);
+                }
+            }
+
+            foreach (var term in freeTextTerms)
+            {
+                var searchTerm = term;
+                source = source.Where(j => MatchesFreeText(j, searchTerm));
+            }
+
+            return source;
+        }
+
+        private static bool MatchesExtension(UserJob job, string ext)
+        {
+            if (!string.IsNullOrEmpty(job.RequestFile?.FileName) &&
+                job.RequestFile.FileName.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (job.SelectedFilePaths != null &&
+                job.SelectedFilePaths.Any(p => p.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
+            if (job.RequestFile?.Files != null &&
+                job.RequestFile.Files.Any(p => p.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool MatchesFreeText(UserJob job, string term)
+        {
+            if (job.Id.ToString().Contains(term, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!string.IsNullOrEmpty(job.RequestFile?.FileName) &&
+                job.RequestFile.FileName.Contains(term, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!string.IsNullOrEmpty(job.RequestFile?.InfoHash) &&
+                job.RequestFile.InfoHash.Contains(term, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!string.IsNullOrEmpty(job.StorageProfile?.ProfileName) &&
+                job.StorageProfile.ProfileName.Contains(term, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!string.IsNullOrEmpty(job.ErrorMessage) &&
+                job.ErrorMessage.Contains(term, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!string.IsNullOrEmpty(job.CurrentState) &&
+                job.CurrentState.Contains(term, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (job.SelectedFilePaths != null &&
+                job.SelectedFilePaths.Any(p => p != null && p.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            if (job.RequestFile?.Files != null &&
+                job.RequestFile.Files.Any(p => p != null && p.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            return false;
+        }
+
+        private static IEnumerable<UserJob> ApplySorting(List<UserJob> jobs, string? sortBy, string? sortDir)
+        {
+            var isAsc = string.Equals(sortDir?.Trim(), "asc", StringComparison.OrdinalIgnoreCase);
+            var normalizedSortBy = (sortBy ?? "createdAt").Trim().ToLowerInvariant();
+
+            return normalizedSortBy switch
+            {
+                "size" or "totalbytes" => isAsc
+                    ? jobs.OrderBy(GetEffectiveTotalBytes).ThenByDescending(j => j.Id)
+                    : jobs.OrderByDescending(GetEffectiveTotalBytes).ThenByDescending(j => j.Id),
+
+                "progress" => isAsc
+                    ? jobs.OrderBy(ComputeEffectiveProgress).ThenByDescending(j => j.Id)
+                    : jobs.OrderByDescending(ComputeEffectiveProgress).ThenByDescending(j => j.Id),
+
+                "speed" => isAsc
+                    ? jobs.OrderBy(ComputeEffectiveSpeed).ThenByDescending(j => j.Id)
+                    : jobs.OrderByDescending(ComputeEffectiveSpeed).ThenByDescending(j => j.Id),
+
+                "name" or "filename" => isAsc
+                    ? jobs.OrderBy(j => j.RequestFile?.FileName ?? string.Empty, StringComparer.OrdinalIgnoreCase).ThenByDescending(j => j.Id)
+                    : jobs.OrderByDescending(j => j.RequestFile?.FileName ?? string.Empty, StringComparer.OrdinalIgnoreCase).ThenByDescending(j => j.Id),
+
+                "completedat" => isAsc
+                    ? jobs.OrderBy(j => j.CompletedAt ?? DateTime.MinValue).ThenByDescending(j => j.Id)
+                    : jobs.OrderByDescending(j => j.CompletedAt ?? DateTime.MinValue).ThenByDescending(j => j.Id),
+
+                "updatedat" => isAsc
+                    ? jobs.OrderBy(j => j.UpdatedAt ?? j.CreatedAt).ThenByDescending(j => j.Id)
+                    : jobs.OrderByDescending(j => j.UpdatedAt ?? j.CreatedAt).ThenByDescending(j => j.Id),
+
+                _ => isAsc
+                    ? jobs.OrderBy(j => j.CreatedAt).ThenBy(j => j.Id)
+                    : jobs.OrderByDescending(j => j.CreatedAt).ThenByDescending(j => j.Id)
+            };
+        }
+
+        private static double ComputeEffectiveProgress(UserJob job)
+        {
+            if (job.Status == JobStatus.COMPLETED)
+                return 100.0;
+
+            var total = GetEffectiveTotalBytes(job);
+            if (total <= 0)
+                return 0.0;
+
+            if (job.Status == JobStatus.UPLOADING ||
+                job.Status == JobStatus.UPLOAD_RETRY ||
+                job.Status == JobStatus.UPLOAD_FAILED ||
+                job.Status == JobStatus.GOOGLE_DRIVE_FAILED)
+            {
+                return Math.Clamp((job.BytesUploaded / (double)total) * 100.0, 0.0, 100.0);
+            }
+
+            return Math.Clamp((job.BytesDownloaded / (double)total) * 100.0, 0.0, 100.0);
+        }
+
+        private static double ComputeEffectiveSpeed(UserJob job)
+        {
+            if (job.Status == JobStatus.DOWNLOADING)
+                return job.DownloadSpeedBytesPerSecond;
+            if (job.Status == JobStatus.UPLOADING)
+                return job.UploadSpeedBytesPerSecond;
+            return Math.Max(job.DownloadSpeedBytesPerSecond, job.UploadSpeedBytesPerSecond);
         }
 
         /// <summary>
@@ -946,6 +1680,5 @@ namespace TorrentDrive.Application.Services
                     return true;
             return false;
         }
-
     }
 }

@@ -8,6 +8,7 @@ namespace TorrentDrive.Core.DTOs.Jobs
         public int Id { get; set; }
         public int StorageProfileId { get; set; }
         public string? StorageProfileName { get; set; }
+        public string? StorageProviderType { get; set; }
 
         /// <summary>Profile the job was created with, when it has since been rerouted.</summary>
         public int? OriginalStorageProfileId { get; set; }
@@ -25,6 +26,11 @@ namespace TorrentDrive.Core.DTOs.Jobs
         public string Type { get; set; } = string.Empty;
         public int RequestFileId { get; set; }
         public string? RequestFileName { get; set; }
+        public string? InfoHash { get; set; }
+        public int TotalFilesCount { get; set; }
+        public int SelectedFilesCount { get; set; }
+        public string MediaCategory { get; set; } = "other";
+        public bool IsStalled { get; set; }
         public string? ErrorMessage { get; set; }
         public string? CurrentState { get; set; }
         public DateTime? StartedAt { get; set; }
@@ -71,6 +77,9 @@ namespace TorrentDrive.Core.DTOs.Jobs
 
         /// <summary>True when this job is not running on the profile it was created with.</summary>
         public bool WasRerouted => OriginalStorageProfileId.HasValue && OriginalStorageProfileId != StorageProfileId;
+
+        /// <summary>True when a subset of files was selected from the torrent.</summary>
+        public bool IsSelective => SelectedFilePaths != null && SelectedFilePaths.Length > 0 && TotalFilesCount > 0 && SelectedFilePaths.Length < TotalFilesCount;
 
         /// <summary>
         /// Status change timeline for this job.

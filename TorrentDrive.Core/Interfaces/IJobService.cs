@@ -17,6 +17,7 @@ namespace TorrentDrive.Core.Interfaces
         /// </summary>
         Task<BatchJobCreationResultDto> CreateAndDispatchJobsAsync(int userId, CreateJobsRequestDto request);
         Task<PaginatedResult<JobDto>> GetUserJobsAsync(int userId, int pageNumber, int pageSize, JobStatus? status = null);
+        Task<PaginatedResult<JobDto>> GetUserJobsAsync(int userId, JobQueryParametersDto query);
         Task<JobDto> GetJobByIdAsync(int userId, int jobId, UserRole? userRole = null);
         Task<JobStatisticsDto> GetUserJobStatisticsAsync(int userId);
 
@@ -27,6 +28,16 @@ namespace TorrentDrive.Core.Interfaces
         /// to a different storage profile than the one that failed.
         /// </summary>
         Task RetryJobAsync(int jobId, int userId, UserRole? userRole = null, int? targetStorageProfileId = null);
+
+        /// <summary>
+        /// Retries multiple failed jobs (either the specified job IDs or all retryable failed jobs for the user).
+        /// </summary>
+        Task<BatchJobActionResultDto> RetryFailedJobsAsync(int userId, BatchJobIdsRequestDto? request = null, UserRole? userRole = null);
+
+        /// <summary>
+        /// Cancels multiple jobs specified in <paramref name="request"/>.
+        /// </summary>
+        Task<BatchJobActionResultDto> CancelJobsAsync(int userId, BatchJobIdsRequestDto request, UserRole? userRole = null);
 
         /// <summary>
         /// Points a job at a different storage profile before its upload starts. Rejected

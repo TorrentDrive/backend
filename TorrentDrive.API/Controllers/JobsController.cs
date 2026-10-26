@@ -11,12 +11,9 @@ namespace TorrentDrive.API.Controllers
     public class JobsController(IJobService jobService, IJobStatusService jobStatusService) : BaseApiController
     {
         [HttpGet]
-        public async Task<IActionResult> GetJobs(
-            [FromQuery] int pageNumber = 1,
-            [FromQuery] int pageSize = 10,
-            [FromQuery] JobStatus? status = null)
+        public async Task<IActionResult> GetJobs([FromQuery] JobQueryParametersDto query)
         {
-            return Ok(await jobService.GetUserJobsAsync(UserId, pageNumber, pageSize, status));
+            return Ok(await jobService.GetUserJobsAsync(UserId, query));
         }
 
         [HttpGet("{id}")]
@@ -52,6 +49,26 @@ namespace TorrentDrive.API.Controllers
         public async Task<IActionResult> GetJobStatistics()
         {
             return Ok(await jobService.GetUserJobStatisticsAsync(UserId));
+        }
+
+        /// <summary>
+        /// Retries all retryable failed jobs for the user, or the subset specified in the request body.
+        /// </summary>
+        [HttpPost("batch/retry-failed")]
+        public async Task<IActionResult> BatchRetryFailedJobs([FromBody] BatchJobIdsRequestDto? request = null)
+        {
+            var result = await jobService.RetryFailedJobsAsync(UserId, request);
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Cancels the jobs specified in the request body (or all cancellable jobs if none specified).
+        /// </summary>
+        [HttpPost("batch/cancel")]
+        public async Task<IActionResult> BatchCancelJobs([FromBody] BatchJobIdsRequestDto? request = null)
+        {
+            var result = await jobService.CancelJobsAsync(UserId, request ?? new BatchJobIdsRequestDto());
+            return Ok(result);
         }
 
         /// <summary>
