@@ -32,21 +32,37 @@ foreach ($p in @(
     if ($p -and (Test-Path $p)) { $DockerDesktopExe = $p; break }
 }
 
+# Locate the docker CLI even when it is not on PATH (Docker Desktop bundles it).
+$DockerCliExe = $null
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    foreach ($p in @(
+        "$env:ProgramFiles\Docker\Docker\resources\bin\docker.exe",
+        "${env:ProgramFiles(x86)}\Docker\Docker\resources\bin\docker.exe",
+        "$env:LocalAppData\Docker\resources\bin\docker.exe"
+    )) {
+        if ($p -and (Test-Path $p)) { $DockerCliExe = $p; break }
+    }
+    if ($DockerCliExe) {
+        $env:PATH = (Split-Path $DockerCliExe) + ";" + $env:PATH
+    }
+}
+
 function Test-DockerReady {
     try { docker info *> $null } catch { }
     return ($LASTEXITCODE -eq 0)
 }
 
-# If the docker CLI is missing, Docker may not be installed at all.
+# If the docker CLI is still missing, Docker is probably not installed at all.
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     if ($DockerDesktopExe) {
-        Write-Warn "Docker CLI not found on PATH but Docker Desktop is installed. Launching it..."
+        Write-Warn "Docker CLI not found but Docker Desktop is installed. Launching it..."
         try { Start-Process -FilePath $DockerDesktopExe | Out-Null } catch { }
+        Write-Warn "Docker Desktop is starting. Re-run this installer once Docker is ready."
     } else {
         Write-Warn "Docker is not installed. Opening the Docker Desktop download page..."
         try { Start-Process "https://docs.docker.com/desktop/install/windows-install/" | Out-Null } catch { }
-        Write-Fail "Docker is not installed. Install Docker Desktop from https://docs.docker.com/desktop/install/windows-install/ then re-run this installer."
     }
+    Write-Fail "Docker is not installed. Install Docker Desktop from https://docs.docker.com/desktop/install/windows-install/ then re-run this installer."
 }
 
 # If Docker is installed but the daemon is not running, try to start Docker Desktop.
