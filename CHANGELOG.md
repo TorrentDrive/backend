@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.3.0] - 2026-10-26
+
+* Rebuild combined image with TorrentDrive/frontend v2.5.0
+
 ## [2.2.0] - 2026-10-26
 
 * fix(deploy): restore docker-compose.dokploy.yml using GHCR images for Dokploy (375cd99)
