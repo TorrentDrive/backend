@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.7.0] - 2026-10-26
+
+* Rebuild combined image with TorrentDrive/frontend v2.9.0
+
 ## [2.6.0] - 2026-10-26
 
 * Rebuild combined image with TorrentDrive/frontend v2.8.0
