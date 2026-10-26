@@ -23,7 +23,7 @@ The second stage of a Job's lifecycle, during which files on the Staging Volume 
 _Avoid_: Stage 2, cloud sync, sync phase
 
 **Stale Job**:
-A Job in an active Download Phase or Upload Phase whose worker heartbeat has not been refreshed within the staleness threshold, indicating a crashed or interrupted worker that requires automatic recovery.
+A Job in an active Download Phase or Upload Phase whose worker heartbeat or queue hand-off has not been refreshed within the staleness threshold, indicating a crashed worker or stalled queue hand-off that requires automatic recovery or Force Start. Exposed on `JobDto` and `JobQueryParametersDto` via `IsStalled` (`StalledJobs` in `JobStatisticsDto`).
 _Avoid_: stuck job, orphan job, zombie job
 
 **Force Start**:

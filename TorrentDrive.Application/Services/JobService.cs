@@ -424,7 +424,7 @@ namespace TorrentDrive.Application.Services
                 TotalJobs = allJobs.Count,
                 ActiveJobs = allJobs.Count(j => j.Status.IsActive()),
                 CompletedJobs = allJobs.Count(j => j.Status.IsCompleted()),
-                FailedJobs = allJobs.Count(j => j.Status.IsFailed()),
+                FailedJobs = allJobs.Count(j => j.Status.IsFailed() && j.Status != JobStatus.CANCELLED),
                 QueuedJobs = allJobs.Count(j => j.Status == JobStatus.QUEUED),
                 DownloadingJobs = allJobs.Count(j => j.Status == JobStatus.DOWNLOADING),
                 PendingUploadJobs = allJobs.Count(j => j.Status == JobStatus.PENDING_UPLOAD),
@@ -507,50 +507,34 @@ namespace TorrentDrive.Application.Services
                 "Batch retry failed jobs requested | UserId: {UserId} | Count: {Count} | TargetStorageProfileId: {TargetProfileId}",
                 userId, targetJobIds.Count, request?.TargetStorageProfileId);
 
-            var result = new BatchJobActionResultDto
-            {
-                TotalRequested = targetJobIds.Count
-            };
-
-            foreach (var jobId in targetJobIds)
-            {
-                try
-                {
-                    await RetryJobAsync(jobId, userId, userRole, request?.TargetStorageProfileId);
-                    result.SucceededJobIds.Add(jobId);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Batch retry failed for job | JobId: {JobId} | UserId: {UserId}", jobId, userId);
-                    result.Errors.Add($"Job #{jobId}: {ex.Message}");
-                }
-            }
-
-            result.SucceededCount = result.SucceededJobIds.Count;
-            result.FailedCount = result.Errors.Count;
-
-            return result;
+            return await ExecuteBatchJobActionAsync(
+                targetJobIds,
+                "retry",
+                jobId => RetryJobAsync(jobId, userId, userRole, request?.TargetStorageProfileId));
         }
 
         public async Task<BatchJobActionResultDto> CancelJobsAsync(int userId, BatchJobIdsRequestDto request, UserRole? userRole = null)
         {
-            List<int> targetJobIds;
+            if (request?.JobIds == null || request.JobIds.Count == 0)
+            {
+                return new BatchJobActionResultDto();
+            }
 
-            if (request?.JobIds is { Count: > 0 })
-            {
-                targetJobIds = request.JobIds.Distinct().ToList();
-            }
-            else
-            {
-                var userJobs = await unitOfWork.Repository<UserJob>().ListAsync(j => j.UserId == userId);
-                targetJobIds = userJobs
-                    .Where(j => j.Status.IsCancellable())
-                    .Select(j => j.Id)
-                    .ToList();
-            }
+            var targetJobIds = request.JobIds.Distinct().ToList();
 
             logger.LogInformation("Batch cancel jobs requested | UserId: {UserId} | Count: {Count}", userId, targetJobIds.Count);
 
+            return await ExecuteBatchJobActionAsync(
+                targetJobIds,
+                "cancel",
+                jobId => CancelJobAsync(jobId, userId, userRole));
+        }
+
+        private async Task<BatchJobActionResultDto> ExecuteBatchJobActionAsync(
+            IReadOnlyCollection<int> targetJobIds,
+            string actionName,
+            Func<int, Task> action)
+        {
             var result = new BatchJobActionResultDto
             {
                 TotalRequested = targetJobIds.Count
@@ -560,12 +544,12 @@ namespace TorrentDrive.Application.Services
             {
                 try
                 {
-                    await CancelJobAsync(jobId, userId, userRole);
+                    await action(jobId);
                     result.SucceededJobIds.Add(jobId);
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "Batch cancel failed for job | JobId: {JobId} | UserId: {UserId}", jobId, userId);
+                    logger.LogWarning(ex, "Batch {ActionName} failed for job | JobId: {JobId}", actionName, jobId);
                     result.Errors.Add($"Job #{jobId}: {ex.Message}");
                 }
             }
@@ -904,21 +888,18 @@ namespace TorrentDrive.Application.Services
             {
                 "all" => source,
                 "active" => source.Where(j => j.Status.IsActive()),
-                "downloading" => source.Where(j =>
-                    j.Status == JobStatus.DOWNLOADING ||
-                    j.Status == JobStatus.TORRENT_DOWNLOAD_RETRY),
+                "downloading" => source.Where(j => j.Status == JobStatus.DOWNLOADING),
                 "uploading" => source.Where(j =>
-                    j.Status == JobStatus.PENDING_UPLOAD ||
                     j.Status == JobStatus.UPLOADING ||
-                    j.Status == JobStatus.UPLOAD_RETRY),
-                "queued" => source.Where(j =>
-                    j.Status == JobStatus.QUEUED ||
                     j.Status == JobStatus.PENDING_UPLOAD),
+                "queued" => source.Where(j => j.Status == JobStatus.QUEUED),
                 "pending_upload" or "pendingupload" => source.Where(j => j.Status == JobStatus.PENDING_UPLOAD),
-                "retrying" => source.Where(j => j.Status.IsRetrying()),
-                "completed" => source.Where(j => j.Status.IsCompleted()),
-                "failed" => source.Where(j => j.Status.IsFailed()),
-                "cancelled" or "canceled" => source.Where(j => j.Status.IsCancelled()),
+                "retrying" => source.Where(j =>
+                    j.Status == JobStatus.TORRENT_DOWNLOAD_RETRY ||
+                    j.Status == JobStatus.UPLOAD_RETRY),
+                "completed" => source.Where(j => j.Status == JobStatus.COMPLETED),
+                "failed" => source.Where(j => j.Status.IsFailed() && j.Status != JobStatus.CANCELLED),
+                "cancelled" or "canceled" => source.Where(j => j.Status == JobStatus.CANCELLED),
                 _ => Enum.TryParse<JobStatus>(phase, ignoreCase: true, out var parsedStatus)
                     ? source.Where(j => j.Status == parsedStatus)
                     : source
