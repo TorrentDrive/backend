@@ -30,7 +30,7 @@ namespace TorrentDrive.Application.Services.Google_Drive
 
         public async Task<string> GetGoogleCallback(string code, string state, string? frontendOrigin = null)
         {
-            var redirectBase = $"{ResolveFrontendUrl(frontendOrigin)}/storage";
+            var redirectBase = $"{ResolveFrontendUrl(frontendOrigin)}/storage/callback";
 
             if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
                 return $"{redirectBase}?error=INVALID_REQUEST&message={HttpUtility.UrlEncode("Missing code or state parameter")}";
