@@ -1,0 +1,169 @@
+# ============================================================
+# TorrentDrive — Dokploy split deployment
+# ============================================================
+# Differences from local / all-in-one docker-compose.yml:
+#   * Dedicated microservice topology (api, workers, postgres, redis).
+#   * Uses prebuilt multi-arch GHCR images for instantaneous deployment.
+#   * Traefik routes domain traffic to the api service on port 8080.
+#   * Secrets and credentials originate from Dokploy environment variables.
+#   * Observability delegates to the host telemetry stack (grafana.gitnasr.com).
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    command: postgres -c max_connections=200
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-torrenclo}
+      POSTGRES_USER: ${POSTGRES_USER:-torrenclo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-torrenclo_user} -d ${POSTGRES_DB:-torrenclo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: ghcr.io/torrentdrive/backend/api:${TORRENTDRIVE_BACKEND_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrenclo};Username=${POSTGRES_USER:-torrenclo_user};Password=${POSTGRES_PASSWORD}
+      - Redis__ConnectionString=redis:6379
+      - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
+      - Jwt__Key=${JWT_SECRET:?JWT_SECRET is required}
+      - Jwt__Issuer=${JWT_ISSUER:-TorrenClou_API}
+      - Jwt__Audience=${JWT_AUDIENCE:-TorrenClou_Client}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:?ADMIN_EMAIL is required}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      - ADMIN_NAME=${ADMIN_NAME:-Admin}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - APPLY_MIGRATIONS=${APPLY_MIGRATIONS:-true}
+      - Observability__EnablePrometheus=${OBSERVABILITY_ENABLE_PROMETHEUS:-true}
+      - Observability__EnableTracing=${OBSERVABILITY_ENABLE_TRACING:-true}
+      - UploadRouting__EnableFailover=${UPLOAD_ROUTING_ENABLE_FAILOVER:-true}
+      - UploadRouting__MaxFailoverAttempts=${UPLOAD_ROUTING_MAX_FAILOVER_ATTEMPTS:-3}
+      - UploadRouting__FailureThreshold=${UPLOAD_ROUTING_FAILURE_THRESHOLD:-3}
+      - Observability__LokiUrl=${OBSERVABILITY_LOKI_URL:-}
+      - Observability__OtlpEndpoint=${OBSERVABILITY_OTLP_ENDPOINT:-}
+      - Observability__OtlpHeaders=${OBSERVABILITY_OTLP_HEADERS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - downloads:/app/downloads
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  torrent-worker:
+    image: ghcr.io/torrentdrive/backend/worker:${TORRENTDRIVE_BACKEND_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrenclo};Username=${POSTGRES_USER:-torrenclo_user};Password=${POSTGRES_PASSWORD}
+      - Redis__ConnectionString=redis:6379
+      - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-10}
+      - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
+      - Jwt__Key=${JWT_SECRET:?JWT_SECRET is required}
+      - Jwt__Issuer=${JWT_ISSUER:-TorrenClou_API}
+      - Jwt__Audience=${JWT_AUDIENCE:-TorrenClou_Client}
+      - Observability__EnablePrometheus=${OBSERVABILITY_ENABLE_PROMETHEUS:-true}
+      - Observability__EnableTracing=${OBSERVABILITY_ENABLE_TRACING:-true}
+      - UploadRouting__EnableFailover=${UPLOAD_ROUTING_ENABLE_FAILOVER:-true}
+      - UploadRouting__MaxFailoverAttempts=${UPLOAD_ROUTING_MAX_FAILOVER_ATTEMPTS:-3}
+      - UploadRouting__FailureThreshold=${UPLOAD_ROUTING_FAILURE_THRESHOLD:-3}
+      - Observability__LokiUrl=${OBSERVABILITY_LOKI_URL:-}
+      - Observability__OtlpEndpoint=${OBSERVABILITY_OTLP_ENDPOINT:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - downloads:/app/downloads
+
+  googledrive-worker:
+    image: ghcr.io/torrentdrive/backend/gdrive-worker:${TORRENTDRIVE_BACKEND_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrenclo};Username=${POSTGRES_USER:-torrenclo_user};Password=${POSTGRES_PASSWORD}
+      - Redis__ConnectionString=redis:6379
+      - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
+      - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-10}
+      - Jwt__Key=${JWT_SECRET:?JWT_SECRET is required}
+      - Jwt__Issuer=${JWT_ISSUER:-TorrenClou_API}
+      - Jwt__Audience=${JWT_AUDIENCE:-TorrenClou_Client}
+      - Observability__EnablePrometheus=${OBSERVABILITY_ENABLE_PROMETHEUS:-true}
+      - Observability__EnableTracing=${OBSERVABILITY_ENABLE_TRACING:-true}
+      - UploadRouting__EnableFailover=${UPLOAD_ROUTING_ENABLE_FAILOVER:-true}
+      - UploadRouting__MaxFailoverAttempts=${UPLOAD_ROUTING_MAX_FAILOVER_ATTEMPTS:-3}
+      - UploadRouting__FailureThreshold=${UPLOAD_ROUTING_FAILURE_THRESHOLD:-3}
+      - Observability__LokiUrl=${OBSERVABILITY_LOKI_URL:-}
+      - Observability__OtlpEndpoint=${OBSERVABILITY_OTLP_ENDPOINT:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - downloads:/app/downloads
+
+  s3-worker:
+    image: ghcr.io/torrentdrive/backend/s3-worker:${TORRENTDRIVE_BACKEND_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrenclo};Username=${POSTGRES_USER:-torrenclo_user};Password=${POSTGRES_PASSWORD}
+      - Redis__ConnectionString=redis:6379
+      - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
+      - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-10}
+      - Jwt__Key=${JWT_SECRET:?JWT_SECRET is required}
+      - Jwt__Issuer=${JWT_ISSUER:-TorrenClou_API}
+      - Jwt__Audience=${JWT_AUDIENCE:-TorrenClou_Client}
+      - Observability__EnablePrometheus=${OBSERVABILITY_ENABLE_PROMETHEUS:-true}
+      - Observability__EnableTracing=${OBSERVABILITY_ENABLE_TRACING:-true}
+      - UploadRouting__EnableFailover=${UPLOAD_ROUTING_ENABLE_FAILOVER:-true}
+      - UploadRouting__MaxFailoverAttempts=${UPLOAD_ROUTING_MAX_FAILOVER_ATTEMPTS:-3}
+      - UploadRouting__FailureThreshold=${UPLOAD_ROUTING_FAILURE_THRESHOLD:-3}
+      - Observability__LokiUrl=${OBSERVABILITY_LOKI_URL:-}
+      - Observability__OtlpEndpoint=${OBSERVABILITY_OTLP_ENDPOINT:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - downloads:/app/downloads
+
+volumes:
+  postgres_data:
+  redis_data:
+  downloads:
