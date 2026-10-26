@@ -67,3 +67,13 @@ _Avoid_: cleanup, prune, garbage collection
 **Instance Claiming**:
 The one-time, irreversible operation on an unconfigured self-hosted deployment that creates the initial administrator account and permanently closes anonymous setup.
 _Avoid_: first-run wizard, initial registration, admin bootstrap
+
+### Packaging & Releases
+
+**Component Release**:
+An independently versioned SemVer release of an individual service repository (`backend` or `frontend`) that publishes split-topology container images and triggers a Combined Release.
+_Avoid_: service tag, sub-release, microservice build
+
+**Combined Release**:
+A SemVer release of the unified all-in-one container image in `deploy` that pins exact, smoke-tested `backend` and `frontend` Component Releases in `components.lock.json`.
+_Avoid_: bundle release, monolithic tag, super-image build

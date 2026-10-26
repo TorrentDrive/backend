@@ -25,6 +25,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       major_minor: ${{ steps.version.outputs.major_minor }}
+      bump: ${{ steps.version.outputs.bump }}
+      should_release: ${{ steps.version.outputs.should_release }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -56,6 +58,16 @@ jobs:
             range="HEAD~1..HEAD"
           fi
 
+          head_subj=$(git log -1 --format="%s")
+          changed_non_docs=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep -vE '(\.md$|^docs/)' || true)
+
+          should_release="true"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            if echo "$head_subj" | grep -qE '^docs(\([^)]+\))?:' || [ -z "$changed_non_docs" ]; then
+              should_release="false"
+            fi
+          fi
+
           commits_full=$(git log $range --format="%s%n%b" 2>/dev/null || git log -1 --format="%s%n%b")
           commits_subj=$(git log $range --format="%s" 2>/dev/null || git log -1 --format="%s")
 
@@ -63,21 +75,28 @@ jobs:
             major=$((major + 1))
             minor=0
             patch=0
+            bump="major"
           elif echo "$commits_subj" | grep -qE '^feat(\([^)]+\))?:'; then
             minor=$((minor + 1))
             patch=0
+            bump="minor"
           else
             patch=$((patch + 1))
+            bump="patch"
           fi
 
           version="${major}.${minor}.${patch}"
           major_minor="${major}.${minor}"
 
-          sed -i "s|<Version>[^<]*</Version>|<Version>${version}</Version>|" Directory.Build.props
+          if [ "$should_release" = "true" ]; then
+            sed -i "s|<Version>[^<]*</Version>|<Version>${version}</Version>|" Directory.Build.props
+          fi
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "major_minor=${major_minor}" >> "$GITHUB_OUTPUT"
-          echo "Computed next version: ${version} (base: ${base_version}, latest tag: ${latest_tag:-none})"
+          echo "bump=${bump}" >> "$GITHUB_OUTPUT"
+          echo "should_release=${should_release}" >> "$GITHUB_OUTPUT"
+          echo "Computed next version: ${version} (bump: ${bump}, should_release: ${should_release}, base: ${base_version}, latest tag: ${latest_tag:-none})"
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
@@ -108,7 +127,7 @@ jobs:
   images:
     name: ${{ matrix.service.name }}
     needs: compile
-    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')
+    if: (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')) && (github.event_name == 'pull_request' || needs.compile.outputs.should_release == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -191,7 +210,7 @@ jobs:
   release:
     name: Release v${{ needs.compile.outputs.version }}
     needs: [compile, images]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(release):')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(release):') && needs.compile.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -294,6 +313,7 @@ jobs:
           fi
 
           version="${{ needs.compile.outputs.version }}"
+          bump="${{ needs.compile.outputs.bump }}"
           sha="${{ steps.publish.outputs.release_sha }}"
 
           if gh api repos/TorrentDrive/deploy/dispatches \
@@ -302,8 +322,9 @@ jobs:
             -f "client_payload[repository]=${GITHUB_REPOSITORY}" \
             -f "client_payload[sha]=${sha}" \
             -f "client_payload[ref]=v${version}" \
+            -f "client_payload[bump]=${bump}" \
             -f "client_payload[actor]=${GITHUB_ACTOR}"; then
-            echo "Dispatched build-combined to TorrentDrive/deploy for v${version} (${sha})."
+            echo "Dispatched build-combined to TorrentDrive/deploy for v${version} (${sha}, bump=${bump})."
           else
             echo "::warning::Failed to dispatch build-combined to TorrentDrive/deploy. Check DEPLOY_PAT permissions."
           fi
