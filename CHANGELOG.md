@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.0] - 2026-10-26
+
+* fix(deploy): restore docker-compose.dokploy.yml using GHCR images for Dokploy (375cd99)
+* fix(jobs): align phase filter counts, require explicit batch cancel IDs, and document IsStalled in glossary (28b1a78)
+* feat(jobs): add token-aware search, multi-facet filtering, sorting, and batch actions (0ebcf0f)
+* feat(ci): fold deploy repo into backend and unify all-in-one release pipeline (b66b7a1)
+* docs(ci): add ADR-0005, release glossary terms, docs-only build skip, and upstream bump forwarding (6c18646)
+
 ## [2.1.1] - 2026-10-25
 
 * ci: simplify CI/CD pipeline with direct automatic SemVer releases on main (ec98bcf)
