@@ -311,6 +311,9 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+            BUILD_TIME=${{ github.event.repository.updated_at }}
           platforms: ${{ matrix.platform }}
           cache-from: type=gha,scope=combined-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=combined-${{ matrix.arch }}

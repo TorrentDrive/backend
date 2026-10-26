@@ -21,15 +21,59 @@ Write-Host "            TorrentDrive Installer            " -ForegroundColor Cya
 Write-Host "  ==========================================" -ForegroundColor Cyan
 Write-Host ""
 
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    Write-Fail "Docker is not installed. Install Docker Desktop from https://docs.docker.com/desktop/install/windows-install/"
+# Locate Docker Desktop executable (if installed) so we can launch it instead of failing.
+$DockerDesktopExe = $null
+foreach ($p in @(
+    "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe",
+    "${env:ProgramFiles(x86)}\Docker\Docker\Docker Desktop.exe",
+    "$env:LocalAppData\Docker\Docker Desktop.exe",
+    "$env:LocalAppData\Programs\Docker\Docker\Docker Desktop.exe"
+)) {
+    if ($p -and (Test-Path $p)) { $DockerDesktopExe = $p; break }
 }
 
-try { docker info *> $null } catch {
-    Write-Fail "Docker Desktop is not running. Start it and try again."
+function Test-DockerReady {
+    try { docker info *> $null } catch { }
+    return ($LASTEXITCODE -eq 0)
 }
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "Docker Desktop is not running. Start it and try again."
+
+# If the docker CLI is missing, Docker may not be installed at all.
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    if ($DockerDesktopExe) {
+        Write-Warn "Docker CLI not found on PATH but Docker Desktop is installed. Launching it..."
+        try { Start-Process -FilePath $DockerDesktopExe | Out-Null } catch { }
+    } else {
+        Write-Warn "Docker is not installed. Opening the Docker Desktop download page..."
+        try { Start-Process "https://docs.docker.com/desktop/install/windows-install/" | Out-Null } catch { }
+        Write-Fail "Docker is not installed. Install Docker Desktop from https://docs.docker.com/desktop/install/windows-install/ then re-run this installer."
+    }
+}
+
+# If Docker is installed but the daemon is not running, try to start Docker Desktop.
+if (-not (Test-DockerReady)) {
+    if ($DockerDesktopExe) {
+        Write-Info "Docker is installed but not running. Starting Docker Desktop..."
+        try { Start-Process -FilePath $DockerDesktopExe | Out-Null } catch {
+            Write-Warn "Could not launch Docker Desktop: $($_.Exception.Message)"
+        }
+        Write-Info "Waiting for Docker to become ready (up to 120 seconds)..."
+        $waited = 0
+        while ($waited -lt 120) {
+            Start-Sleep -Seconds 5
+            $waited += 5
+            if (Test-DockerReady) { break }
+            Write-Host "`r    $waited s elapsed..." -NoNewline -ForegroundColor DarkGray
+        }
+        Write-Host "`r                            `r" -NoNewline
+    } else {
+        Write-Warn "Docker Desktop is not running and could not be located on this machine."
+    }
+}
+
+if (-not (Test-DockerReady)) {
+    Write-Warn "Docker is still not ready."
+    try { Start-Process "https://docs.docker.com/desktop/install/windows-install/" | Out-Null } catch { }
+    Write-Fail "Docker Desktop is not running. Start it manually and try again."
 }
 Write-Ok "Docker is ready"
 

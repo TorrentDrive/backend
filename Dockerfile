@@ -60,15 +60,18 @@ COPY TorrentDrive.Worker/ TorrentDrive.Worker/
 COPY TorrentDrive.GoogleDrive.Worker/ TorrentDrive.GoogleDrive.Worker/
 COPY TorrentDrive.S3.Worker/ TorrentDrive.S3.Worker/
 
+ARG BUILD_SHA=""
+ARG BUILD_TIME=""
+
 # Publish each project to its own directory
 RUN dotnet publish TorrentDrive.API/TorrentDrive.API.csproj \
-      -c Release --no-restore -o /publish/api /p:UseAppHost=false
+      -c Release --no-restore -o /publish/api /p:UseAppHost=false /p:BuildSha=$BUILD_SHA /p:BuildTime=$BUILD_TIME
 RUN dotnet publish TorrentDrive.Worker/TorrentDrive.Worker.csproj \
-      -c Release --no-restore -o /publish/torrent-worker /p:UseAppHost=false
+      -c Release --no-restore -o /publish/torrent-worker /p:UseAppHost=false /p:BuildSha=$BUILD_SHA /p:BuildTime=$BUILD_TIME
 RUN dotnet publish TorrentDrive.GoogleDrive.Worker/TorrentDrive.GoogleDrive.Worker.csproj \
-      -c Release --no-restore -o /publish/gdrive-worker /p:UseAppHost=false
+      -c Release --no-restore -o /publish/gdrive-worker /p:UseAppHost=false /p:BuildSha=$BUILD_SHA /p:BuildTime=$BUILD_TIME
 RUN dotnet publish TorrentDrive.S3.Worker/TorrentDrive.S3.Worker.csproj \
-      -c Release --no-restore -o /publish/s3-worker /p:UseAppHost=false
+      -c Release --no-restore -o /publish/s3-worker /p:UseAppHost=false /p:BuildSha=$BUILD_SHA /p:BuildTime=$BUILD_TIME
 
 # ---- Stage 3: Runtime ----
 FROM ubuntu:22.04 AS runtime

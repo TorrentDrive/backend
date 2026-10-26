@@ -6,7 +6,8 @@
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
-# Copy solution and project files for dependency restoration
+# Copy solution, shared build properties, and project files for dependency restoration
+COPY Directory.Build.props .
 COPY TorrentDrive.sln .
 COPY TorrentDrive.Core/TorrentDrive.Core.csproj TorrentDrive.Core/
 COPY TorrentDrive.Application/TorrentDrive.Application.csproj TorrentDrive.Application/

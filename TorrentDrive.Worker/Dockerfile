@@ -8,7 +8,8 @@
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
-# Copy ONLY the project files we need (no solution file, no other workers)
+# Copy shared build properties and ONLY the project files we need
+COPY Directory.Build.props .
 COPY TorrentDrive.Core/TorrentDrive.Core.csproj TorrentDrive.Core/
 COPY TorrentDrive.Application/TorrentDrive.Application.csproj TorrentDrive.Application/
 COPY TorrentDrive.Infrastructure/TorrentDrive.Infrastructure.csproj TorrentDrive.Infrastructure/
@@ -71,4 +72,3 @@ USER appuser
 
 # Set entry point
 ENTRYPOINT ["dotnet", "TorrentDrive.Worker.dll"]
-
