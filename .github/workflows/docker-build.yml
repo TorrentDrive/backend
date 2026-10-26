@@ -472,7 +472,7 @@ jobs:
 
       - name: Notify the deploy webhook, if configured
         env:
-          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL || secrets.DOKPLOY_DEPLOY_URL || secrets.DEPLOY_URL }}
         run: |
           set -uo pipefail
           if [ -z "${DEPLOY_WEBHOOK_URL}" ]; then
