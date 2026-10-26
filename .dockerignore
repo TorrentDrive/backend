@@ -5,8 +5,12 @@
 .vscode
 **/bin
 **/obj
+frontend/node_modules
+frontend/.next
 
-# Ignore scripts and docs
+# Ignore docs and installer scripts (keep entrypoint.sh and wait-for-db.sh for the all-in-one image)
 *.md
-*.sh
-*.ps1
+install.sh
+install.ps1
+run.sh
+run.ps1

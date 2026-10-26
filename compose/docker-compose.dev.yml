@@ -1,0 +1,40 @@
+# TorrentDrive — build from source.
+#
+# For working on the all-in-one image itself. Expects frontend checked out into
+# ./frontend inside backend:
+#
+#   docker compose -f compose/docker-compose.dev.yml up --build
+
+services:
+  torrentdrive:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: torrentdrive-local:dev
+    container_name: torrentdrive-dev
+    restart: unless-stopped
+
+    ports:
+      - "47100:47100"
+      - "47200:47200"
+      - "47500:47500"
+      - "47600:47600"
+
+    volumes:
+      - dev-pgdata:/data/postgres
+      - dev-redis:/data/redis
+      - dev-downloads:/data/downloads
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:47200/api/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+# Prefixed dev- so a local build never touches the volumes of a real install on
+# the same machine.
+volumes:
+  dev-pgdata:
+  dev-redis:
+  dev-downloads:

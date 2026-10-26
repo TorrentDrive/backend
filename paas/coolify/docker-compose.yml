@@ -1,0 +1,35 @@
+# documentation: https://tc.gitnasr.com/docs/paas/coolify
+# slogan: Self-hosted torrent-to-cloud transfer platform for Google Drive and S3.
+# tags: torrent,cloud,google-drive,s3,self-hosted,downloader
+# logo: https://raw.githubusercontent.com/TorrentDrive/website/main/public/logo.svg
+# port: 47100
+
+services:
+  torrentdrive:
+    image: ghcr.io/torrentdrive/torrentdrive:${TORRENTDRIVE_VERSION:-latest}
+    restart: unless-stopped
+
+    environment:
+      # Coolify magic variable: generates the full URL (with https:// scheme)
+      # and routes the reverse proxy to container port 47100.
+      - SERVICE_FQDN_TORRENTDRIVE_47100
+      - PUBLIC_FRONTEND_URL=${SERVICE_URL_TORRENTDRIVE}
+      - NEXTAUTH_URL=${SERVICE_URL_TORRENTDRIVE}
+      - TORRENT_REQUIRE_ENCRYPTION=${TORRENT_REQUIRE_ENCRYPTION:-false}
+
+    volumes:
+      - torrentdrive-pgdata:/data/postgres
+      - torrentdrive-redis:/data/redis
+      - torrentdrive-downloads:/data/downloads
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:47200/api/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  torrentdrive-pgdata:
+  torrentdrive-redis:
+  torrentdrive-downloads:

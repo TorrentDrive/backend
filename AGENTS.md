@@ -1,10 +1,9 @@
 # TorrentDrive Workspace Instructions (`AGENTS.md`)
 
-TorrentDrive is a self-hosted torrent-to-cloud platform split across four repositories under `D:\Coding\TorrentDrive`:
-- [`backend/`](file:///D:/Coding/TorrentDrive/backend) — .NET 9 Clean Architecture API, Hangfire orchestrator, hardened MonoTorrent worker (`torrent-worker`), and cloud upload workers (`gdrive-worker`, `s3-worker`).
+TorrentDrive is a self-hosted torrent-to-cloud platform split across three repositories under `D:\Coding\TorrentDrive`:
+- [`backend/`](file:///D:/Coding/TorrentDrive/backend) — .NET 9 Clean Architecture API, Hangfire orchestrator, hardened MonoTorrent worker (`torrent-worker`), cloud upload workers (`gdrive-worker`, `s3-worker`), unified all-in-one container (`Dockerfile`), root `docker-compose.yml`, one-liner installers (`install.sh`, `install.ps1`), and 1-click PaaS blueprints (`paas/{dokploy,coolify,render,railway}`).
 - [`frontend/`](file:///D:/Coding/TorrentDrive/frontend) — Next.js 15 App Router UI on port `47100`, proxying `/proxy/api/*` same-origin to the backend API (`:47200`) and exposing `/api/health/ready`.
 - [`website/`](file:///D:/Coding/TorrentDrive/website) — Next.js 16 marketing landing page (`src/components/landing/`) and Fumadocs documentation (`content/docs/`).
-- [`deploy/`](file:///D:/Coding/TorrentDrive/deploy) — Unified all-in-one container (`container/`), root `docker-compose.yml`, one-liner installers (`install.sh`, `install.ps1`), and 1-click PaaS blueprints (`paas/{dokploy,coolify,render,railway}`).
 
 ## Context Pointers
 
@@ -25,6 +24,6 @@ TorrentDrive is a self-hosted torrent-to-cloud platform split across four reposi
    - Use only tokens defined in `tailwind.config.ts` (`primary`, `surface`, `surface-tonal`, `success`, `warning`, `danger`, `info`, and shadcn semantic variables).
    - Use Radix `<Switch>` (`@/components/ui/switch`) for boolean toggles and shared `<StatsCard>` (`@/components/shared/StatsCard`) for KPI summary rows.
    - Never introduce `NEXT_PUBLIC_*` backend URLs; browser requests always use same-origin `/proxy/api/*`.
-4. **Zero-Config & Loopback-First Deployment (`deploy`)**:
+4. **Zero-Config & Loopback-First Deployment (`backend`)**:
    - `docker compose up -d` and `install.sh` / `install.ps1` must work with zero `.env` files; secrets are generated on first boot into `/data/postgres/secrets.env` inside the `torrentdrive-pgdata` volume.
    - Expose only port `47100` publicly. Keep `47200` (API/Hangfire), `47500` (Grafana), and `47600` (Prometheus) bound to `127.0.0.1` in host compose files and unrouted in PaaS templates (`dokploy`, `coolify`, `render`, `railway`).

@@ -1,0 +1,36 @@
+# TorrentDrive on Dokploy
+#
+# 1-Click Template / Compose deployment for Dokploy.
+# Dokploy routes traffic via Traefik to port 47100 inside the container.
+# All database, Redis, and JWT/NextAuth secrets are generated automatically on
+# first boot and persisted in the torrentdrive-pgdata volume.
+
+services:
+  torrentdrive:
+    image: ghcr.io/torrentdrive/torrentdrive:${TORRENTDRIVE_VERSION:-latest}
+    restart: unless-stopped
+
+    expose:
+      - "47100"
+
+    environment:
+      PUBLIC_FRONTEND_URL: ${PUBLIC_FRONTEND_URL:-}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-}
+      TORRENT_REQUIRE_ENCRYPTION: ${TORRENT_REQUIRE_ENCRYPTION:-false}
+
+    volumes:
+      - torrentdrive-pgdata:/data/postgres
+      - torrentdrive-redis:/data/redis
+      - torrentdrive-downloads:/data/downloads
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:47200/api/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  torrentdrive-pgdata:
+  torrentdrive-redis:
+  torrentdrive-downloads:

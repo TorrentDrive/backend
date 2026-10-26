@@ -1,21 +1,22 @@
 # TorrentDrive Backend
 
-The .NET 9 API and background workers behind
+The .NET 9 API, background workers, and all-in-one deployment files behind
 [TorrentDrive](https://tc.gitnasr.com) — self-hosted torrent-to-cloud.
 
-> **Just want to run it?** You do not need this repo.
+> **Just want to run it?**
 >
 > <!-- snippet:install-linux -->
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/TorrentDrive/deploy/main/install.sh | bash
+> curl -fsSL https://raw.githubusercontent.com/TorrentDrive/backend/main/install.sh | bash
 > ```
 > <!-- /snippet -->
 >
+> Or run `docker compose up -d` from the root of this repository.
 > Full documentation: **[tc.gitnasr.com/docs](https://tc.gitnasr.com/docs)**
 
 ## What lives in this repo
 
-Clean Architecture, so the domain does not depend on frameworks or databases.
+Clean Architecture, so the domain does not depend on frameworks or databases, plus the zero-config all-in-one container and PaaS blueprints.
 
 ```
 TorrentDrive.sln
@@ -25,17 +26,17 @@ TorrentDrive.sln
 ├── TorrentDrive.API/                  # ASP.NET Core controllers, middleware, DI
 ├── TorrentDrive.Worker/               # Torrent downloads
 ├── TorrentDrive.GoogleDrive.Worker/   # Google Drive uploads
-└── TorrentDrive.S3.Worker/            # S3 uploads
+├── TorrentDrive.S3.Worker/            # S3 uploads
+├── Dockerfile                         # Unified all-in-one container image
+├── docker-compose.yml                 # Zero-config single-command stack
+├── compose/                           # Split, dev, and local-build compose topologies
+└── paas/                              # 1-click blueprints (Dokploy, Coolify, Render, Railway)
 ```
 
 **Dependency flow:** `API / Workers` → `Application` → `Core` ← `Infrastructure`
 
 Each worker is an independent process sharing the same PostgreSQL and Redis as
 the API, pulling from its own Hangfire queue, and scalable on its own.
-
-> The projects are still named `TorrentDrive.*` while the product is `TorrentDrive`.
-> That rename is tracked separately — it touches every namespace and assembly,
-> so it lands in one atomic change rather than piecemeal.
 
 ## Developing
 
@@ -45,7 +46,7 @@ Requires the [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) and
 ```bash
 git clone https://github.com/TorrentDrive/backend.git
 cd backend
-docker compose up -d postgres redis
+docker compose -f compose/docker-compose.local-build.yml up -d postgres redis
 dotnet run --project TorrentDrive.API
 ```
 
@@ -69,9 +70,9 @@ code, so they are not restated here.
 
 | Repository | Contents |
 |------------|----------|
+| [backend](https://github.com/TorrentDrive/backend) | .NET 9 API, workers, all-in-one image, installer, and PaaS blueprints |
 | [frontend](https://github.com/TorrentDrive/frontend) | Next.js web app |
 | [website](https://github.com/TorrentDrive/website) | Documentation site — the canonical docs live here |
-| [deploy](https://github.com/TorrentDrive/deploy) | All-in-one image, installer, CI |
 
 ## License
 

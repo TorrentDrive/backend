@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # TorrentDrive API - OpenTelemetry metrics endpoint
+  - job_name: 'torrentdrive-api'
+    static_configs:
+      - targets: ['127.0.0.1:47200']
+    metrics_path: '/metrics'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['127.0.0.1:47600']

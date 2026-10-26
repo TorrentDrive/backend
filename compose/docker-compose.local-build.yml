@@ -1,0 +1,251 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: torrentdrive_postgres
+    command: postgres -c max_connections=200
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-torrentdrive}
+      POSTGRES_USER: ${POSTGRES_USER:-torrentdrive_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "${POSTGRES_PORT:-47300}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-torrentdrive_user} -d ${POSTGRES_DB:-torrentdrive}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache & Job State
+  redis:
+    image: redis:7-alpine
+    container_name: torrentdrive_redis
+    ports:
+      - "${REDIS_PORT:-47400}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Hangfire Dashboard & Background Jobs
+  api:
+    build:
+      context: ..
+      dockerfile: TorrentDrive.API/Dockerfile
+    container_name: torrentdrive_api
+    ports:
+      - "${API_PORT:-47200}:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrentdrive};Username=${POSTGRES_USER:-torrentdrive_user};Password=${POSTGRES_PASSWORD:-changeme}
+      - Redis__ConnectionString=redis:6379
+      - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
+      - Jwt__Key=${JWT_SECRET}
+      - Jwt__Issuer=${JWT_ISSUER:-TorrentDrive_API}
+      - Jwt__Audience=${JWT_AUDIENCE:-TorrentDrive_Client}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@gitnasr.com}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-P@ssword123!}
+      - ADMIN_NAME=${ADMIN_NAME:-Admin}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:47100}
+      - APPLY_MIGRATIONS=${APPLY_MIGRATIONS:-true}
+      - UploadRouting__EnableFailover=${UPLOAD_ROUTING_ENABLE_FAILOVER:-true}
+      - UploadRouting__MaxFailoverAttempts=${UPLOAD_ROUTING_MAX_FAILOVER_ATTEMPTS:-3}
+      - UploadRouting__FailureThreshold=${UPLOAD_ROUTING_FAILURE_THRESHOLD:-3}
+      - Observability__LokiUrl=${OBSERVABILITY_LOKI_URL:-http://loki:3100}
+      - Observability__LokiUsername=${OBSERVABILITY_LOKI_USERNAME:-}
+      - Observability__LokiApiKey=${OBSERVABILITY_LOKI_API_KEY:-}
+      - Observability__OtlpEndpoint=${OBSERVABILITY_OTLP_ENDPOINT:-}
+      - Observability__OtlpHeaders=${OBSERVABILITY_OTLP_HEADERS:-}
+      - Observability__EnablePrometheus=${OBSERVABILITY_ENABLE_PROMETHEUS:-true}
+      - Observability__EnableTracing=${OBSERVABILITY_ENABLE_TRACING:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - downloads:/app/downloads
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+  # Torrent Download Worker
+  torrent-worker:
+    build:
+      context: ..
+      dockerfile: TorrentDrive.Worker/Dockerfile
+    container_name: torrentdrive_torrent_worker
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrentdrive};Username=${POSTGRES_USER:-torrentdrive_user};Password=${POSTGRES_PASSWORD:-changeme}
+      - Redis__ConnectionString=redis:6379
+      - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-10}
+      - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
+      - UploadRouting__EnableFailover=${UPLOAD_ROUTING_ENABLE_FAILOVER:-true}
+      - UploadRouting__MaxFailoverAttempts=${UPLOAD_ROUTING_MAX_FAILOVER_ATTEMPTS:-3}
+      - UploadRouting__FailureThreshold=${UPLOAD_ROUTING_FAILURE_THRESHOLD:-3}
+      - Observability__LokiUrl=${OBSERVABILITY_LOKI_URL:-http://loki:3100}
+      - Observability__LokiUsername=${OBSERVABILITY_LOKI_USERNAME:-}
+      - Observability__LokiApiKey=${OBSERVABILITY_LOKI_API_KEY:-}
+      - Observability__OtlpEndpoint=${OBSERVABILITY_OTLP_ENDPOINT:-}
+      - Observability__OtlpHeaders=${OBSERVABILITY_OTLP_HEADERS:-}
+      - Observability__EnablePrometheus=${OBSERVABILITY_ENABLE_PROMETHEUS:-true}
+      - Observability__EnableTracing=${OBSERVABILITY_ENABLE_TRACING:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - downloads:/app/downloads
+    restart: unless-stopped
+
+  # Google Drive Sync Worker
+  googledrive-worker:
+    build:
+      context: ..
+      dockerfile: TorrentDrive.GoogleDrive.Worker/Dockerfile
+    container_name: torrentdrive_googledrive_worker
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrentdrive};Username=${POSTGRES_USER:-torrentdrive_user};Password=${POSTGRES_PASSWORD:-changeme}
+      - Redis__ConnectionString=redis:6379
+      - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
+      - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-10}
+      - UploadRouting__EnableFailover=${UPLOAD_ROUTING_ENABLE_FAILOVER:-true}
+      - UploadRouting__MaxFailoverAttempts=${UPLOAD_ROUTING_MAX_FAILOVER_ATTEMPTS:-3}
+      - UploadRouting__FailureThreshold=${UPLOAD_ROUTING_FAILURE_THRESHOLD:-3}
+      - Observability__LokiUrl=${OBSERVABILITY_LOKI_URL:-http://loki:3100}
+      - Observability__LokiUsername=${OBSERVABILITY_LOKI_USERNAME:-}
+      - Observability__LokiApiKey=${OBSERVABILITY_LOKI_API_KEY:-}
+      - Observability__OtlpEndpoint=${OBSERVABILITY_OTLP_ENDPOINT:-}
+      - Observability__OtlpHeaders=${OBSERVABILITY_OTLP_HEADERS:-}
+      - Observability__EnablePrometheus=${OBSERVABILITY_ENABLE_PROMETHEUS:-true}
+      - Observability__EnableTracing=${OBSERVABILITY_ENABLE_TRACING:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - downloads:/app/downloads
+    restart: unless-stopped
+
+  # S3 Upload Worker
+  s3-worker:
+    build:
+      context: ..
+      dockerfile: TorrentDrive.S3.Worker/Dockerfile
+    container_name: torrentdrive_s3_worker
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-torrentdrive};Username=${POSTGRES_USER:-torrentdrive_user};Password=${POSTGRES_PASSWORD:-changeme}
+      - Redis__ConnectionString=redis:6379
+      - TORRENT_DOWNLOAD_PATH=${TORRENT_DOWNLOAD_PATH:-/app/downloads}
+      - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-10}
+      - UploadRouting__EnableFailover=${UPLOAD_ROUTING_ENABLE_FAILOVER:-true}
+      - UploadRouting__MaxFailoverAttempts=${UPLOAD_ROUTING_MAX_FAILOVER_ATTEMPTS:-3}
+      - UploadRouting__FailureThreshold=${UPLOAD_ROUTING_FAILURE_THRESHOLD:-3}
+      - Observability__LokiUrl=${OBSERVABILITY_LOKI_URL:-http://loki:3100}
+      - Observability__LokiUsername=${OBSERVABILITY_LOKI_USERNAME:-}
+      - Observability__LokiApiKey=${OBSERVABILITY_LOKI_API_KEY:-}
+      - Observability__OtlpEndpoint=${OBSERVABILITY_OTLP_ENDPOINT:-}
+      - Observability__OtlpHeaders=${OBSERVABILITY_OTLP_HEADERS:-}
+      - Observability__EnablePrometheus=${OBSERVABILITY_ENABLE_PROMETHEUS:-true}
+      - Observability__EnableTracing=${OBSERVABILITY_ENABLE_TRACING:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - downloads:/app/downloads
+    restart: unless-stopped
+
+  # Loki - Log aggregation
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: torrentdrive_loki
+    ports:
+      - "47700:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+    healthcheck:
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/ready" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Prometheus - Metrics collection
+  prometheus:
+    image: prom/prometheus:v2.48.1
+    container_name: torrentdrive_prometheus
+    ports:
+      - "47600:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    volumes:
+      - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Grafana - Visualization dashboard
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: torrentdrive_grafana
+    ports:
+      - "47500:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:47500
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  downloads:
+    driver: local
+  loki_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

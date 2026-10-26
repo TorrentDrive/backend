@@ -1,0 +1,49 @@
+# TorrentDrive — Single-Command All-in-One Stack
+#
+# Run from the repository root:
+#   docker compose up -d
+#
+# Or directly without cloning:
+#   curl -fsSL https://raw.githubusercontent.com/TorrentDrive/backend/main/install.sh | bash
+#
+# Includes: Next.js Web UI (:47100), .NET 9 API (:47200 internal), Torrent/Drive/S3
+# workers, PostgreSQL 15, Redis, Prometheus, and Grafana (:47500 optional).
+# Secrets are auto-generated on first boot and persisted in torrentdrive-pgdata.
+
+services:
+  torrentdrive:
+    image: ghcr.io/torrentdrive/torrentdrive:${TORRENTDRIVE_VERSION:-latest}
+    container_name: torrentdrive
+    restart: unless-stopped
+
+    ports:
+      # Web UI + same-origin API proxy (/proxy/api/*) + health probe (/api/health/ready)
+      - "${TORRENTDRIVE_PORT:-47100}:47100"
+      # Optional: bind Grafana or API to localhost only when needed
+      # - "127.0.0.1:${GRAFANA_PORT:-47500}:47500"
+      # - "127.0.0.1:${API_PORT:-47200}:47200"
+
+    environment:
+      PUBLIC_FRONTEND_URL: ${PUBLIC_FRONTEND_URL:-}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-}
+      TORRENT_REQUIRE_ENCRYPTION: ${TORRENT_REQUIRE_ENCRYPTION:-false}
+
+    volumes:
+      - torrentdrive-pgdata:/data/postgres
+      - torrentdrive-redis:/data/redis
+      - torrentdrive-downloads:/data/downloads
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:47200/api/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  torrentdrive-pgdata:
+    name: torrentdrive-pgdata
+  torrentdrive-redis:
+    name: torrentdrive-redis
+  torrentdrive-downloads:
+    name: torrentdrive-downloads

@@ -1,0 +1,19 @@
+# Dokploy 1-Click Template configuration for TorrentDrive
+# Automatically assigns a domain routed to port 47100 and wires environment variables.
+
+[variables]
+main_domain = "${domain}"
+
+[config]
+[[config.domains]]
+serviceName = "torrentdrive"
+port = 47100
+host = "${main_domain}"
+
+env = [
+  "PUBLIC_FRONTEND_URL=https://${main_domain}",
+  "NEXTAUTH_URL=https://${main_domain}",
+  "TORRENT_REQUIRE_ENCRYPTION=false"
+]
+
+mounts = []

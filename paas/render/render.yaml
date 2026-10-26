@@ -1,0 +1,32 @@
+# Render Blueprint for TorrentDrive.
+#
+# Deploy: https://render.com/deploy?repo=https://github.com/TorrentDrive/backend
+
+services:
+  - type: web
+    name: torrentdrive
+    runtime: image
+    image:
+      url: ghcr.io/torrentdrive/torrentdrive:latest
+    plan: standard
+    healthCheckPath: /api/health/ready
+    numInstances: 1
+    envVars:
+      - key: PORT
+        value: "47100"
+      - key: BACKEND_URL
+        value: http://127.0.0.1:47200
+      - key: PUBLIC_FRONTEND_URL
+        fromService:
+          name: torrentdrive
+          type: web
+          property: host
+      - key: NEXTAUTH_URL
+        fromService:
+          name: torrentdrive
+          type: web
+          property: host
+    disk:
+      name: torrentdrive-data
+      mountPath: /data
+      sizeGB: 20

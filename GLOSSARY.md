@@ -71,9 +71,9 @@ _Avoid_: first-run wizard, initial registration, admin bootstrap
 ### Packaging & Releases
 
 **Component Release**:
-An independently versioned SemVer release of an individual service repository (`backend` or `frontend`) that publishes split-topology container images and triggers a Combined Release.
+An independently versioned SemVer release of an individual service repository (`backend` or `frontend`) that publishes split-topology container images.
 _Avoid_: service tag, sub-release, microservice build
 
 **Combined Release**:
-A SemVer release of the unified all-in-one container image in `deploy` that pins exact, smoke-tested `backend` and `frontend` Component Releases in `components.lock.json`.
+A SemVer release of the unified all-in-one container image (`ghcr.io/torrentdrive/torrentdrive`) built and smoke-tested in `backend` from the latest `backend` and `frontend` sources.
 _Avoid_: bundle release, monolithic tag, super-image build

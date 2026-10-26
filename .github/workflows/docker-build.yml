@@ -7,6 +7,9 @@ on:
   pull_request:
     branches:
       - main
+  repository_dispatch:
+    types:
+      - build-combined
   workflow_dispatch:
 
 concurrency:
@@ -68,21 +71,30 @@ jobs:
             fi
           fi
 
-          commits_full=$(git log $range --format="%s%n%b" 2>/dev/null || git log -1 --format="%s%n%b")
-          commits_subj=$(git log $range --format="%s" 2>/dev/null || git log -1 --format="%s")
-
-          if echo "$commits_full" | grep -qE '(BREAKING CHANGE|^[a-z]+(\([^)]+\))?!:)'; then
-            major=$((major + 1))
-            minor=0
-            patch=0
-            bump="major"
-          elif echo "$commits_subj" | grep -qE '^feat(\([^)]+\))?:'; then
-            minor=$((minor + 1))
-            patch=0
-            bump="minor"
+          dispatch_bump="${{ github.event.client_payload.bump }}"
+          if [ "${{ github.event_name }}" = "repository_dispatch" ] && [ -n "$dispatch_bump" ]; then
+            case "$dispatch_bump" in
+              major) major=$((major + 1)); minor=0; patch=0; bump="major" ;;
+              minor) minor=$((minor + 1)); patch=0; bump="minor" ;;
+              *)     patch=$((patch + 1)); bump="patch" ;;
+            esac
           else
-            patch=$((patch + 1))
-            bump="patch"
+            commits_full=$(git log $range --format="%s%n%b" 2>/dev/null || git log -1 --format="%s%n%b")
+            commits_subj=$(git log $range --format="%s" 2>/dev/null || git log -1 --format="%s")
+
+            if echo "$commits_full" | grep -qE '(BREAKING CHANGE|^[a-z]+(\([^)]+\))?!:)'; then
+              major=$((major + 1))
+              minor=0
+              patch=0
+              bump="major"
+            elif echo "$commits_subj" | grep -qE '^feat(\([^)]+\))?:'; then
+              minor=$((minor + 1))
+              patch=0
+              bump="minor"
+            else
+              patch=$((patch + 1))
+              bump="patch"
+            fi
           fi
 
           version="${major}.${minor}.${patch}"
@@ -207,18 +219,187 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
           platforms: linux/amd64,linux/arm64
 
+  smoke:
+    name: Smoke test (all-in-one)
+    needs: compile
+    if: (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')) && (github.event_name == 'pull_request' || needs.compile.outputs.should_release == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout backend
+        uses: actions/checkout@v4
+
+      - name: Stamp release version into Directory.Build.props
+        run: |
+          sed -i "s|<Version>[^<]*</Version>|<Version>${{ needs.compile.outputs.version }}</Version>|" Directory.Build.props
+
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+        with:
+          repository: TorrentDrive/frontend
+          path: frontend
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 all-in-one image for testing
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: torrentdrive-smoke:test
+          cache-from: type=gha,scope=combined-amd64
+          cache-to: type=gha,mode=max,scope=combined-amd64
+          platforms: linux/amd64
+
+      - name: Smoke test - boot with no configuration at all
+        run: bash .github/scripts/smoke-test.sh
+
+  combined-image:
+    name: All-in-One (${{ matrix.arch }})
+    needs: [compile, smoke]
+    if: (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')) && (github.event_name == 'pull_request' || needs.compile.outputs.should_release == 'true')
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout backend
+        uses: actions/checkout@v4
+
+      - name: Stamp release version into Directory.Build.props
+        run: |
+          sed -i "s|<Version>[^<]*</Version>|<Version>${{ needs.compile.outputs.version }}</Version>|" Directory.Build.props
+
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+        with:
+          repository: TorrentDrive/frontend
+          path: frontend
+
+      - name: Set image name (lowercase)
+        id: image
+        run: |
+          echo "name=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/torrentdrive" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=combined-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=combined-${{ matrix.arch }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+
+      - name: Export the digest
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload the digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
   release:
     name: Release v${{ needs.compile.outputs.version }}
-    needs: [compile, images]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(release):') && needs.compile.outputs.should_release == 'true'
+    needs: [compile, images, combined-image]
+    if: github.event_name != 'pull_request' && (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')) && needs.compile.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
     steps:
+      - name: Download the digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set image name (lowercase)
+        id: image
+        run: |
+          echo "name=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/torrentdrive" >> "$GITHUB_OUTPUT"
+
+      - name: Generate CalVer tag
+        id: calver
+        run: |
+          set -euo pipefail
+          DATE_TAG=$(date +'%Y.%m.%d')
+          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          echo "full_tag=${DATE_TAG}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the combined image manifest list
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          image="${{ steps.image.outputs.name }}"
+          version="${{ needs.compile.outputs.version }}"
+          major_minor="${{ needs.compile.outputs.major_minor }}"
+          calver_tag="${{ steps.calver.outputs.full_tag }}"
+
+          refs=""
+          for digest in *; do
+            refs="${refs} ${image}@sha256:${digest}"
+          done
+          echo "Merging:${refs}"
+
+          docker buildx imagetools create \
+            --tag "${image}:latest" \
+            --tag "${image}:${version}" \
+            --tag "${image}:${major_minor}" \
+            --tag "${image}:${calver_tag}" \
+            ${refs}
+
+          docker buildx imagetools inspect "${image}:latest"
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -242,6 +423,9 @@ jobs:
             notes=$(git log "${latest_tag}..HEAD" --no-merges --pretty=format:"* %s (%h)" | grep -v '^. chore(release):' || true)
           else
             notes=$(git log -1 --pretty=format:"* %s (%h)")
+          fi
+          if [ "${{ github.event_name }}" = "repository_dispatch" ] && [ -n "${{ github.event.client_payload.ref }}" ]; then
+            notes="* Rebuild combined image with TorrentDrive/frontend ${{ github.event.client_payload.ref }}"
           fi
           [ -z "$notes" ] && notes="* Maintenance release (${GITHUB_SHA:0:7})"
 
@@ -302,7 +486,7 @@ jobs:
             *)  echo "::warning::Deploy webhook returned ${status}. The images and release published successfully; only the redeploy notification failed." ;;
           esac
 
-      - name: Dispatch downstream builds (deploy & website)
+      - name: Dispatch downstream builds (website)
         env:
           GH_TOKEN: ${{ secrets.DEPLOY_PAT }}
         run: |
@@ -313,21 +497,7 @@ jobs:
           fi
 
           version="${{ needs.compile.outputs.version }}"
-          bump="${{ needs.compile.outputs.bump }}"
           sha="${{ steps.publish.outputs.release_sha }}"
-
-          if gh api repos/TorrentDrive/deploy/dispatches \
-            --method POST \
-            -f event_type="build-combined" \
-            -f "client_payload[repository]=${GITHUB_REPOSITORY}" \
-            -f "client_payload[sha]=${sha}" \
-            -f "client_payload[ref]=v${version}" \
-            -f "client_payload[bump]=${bump}" \
-            -f "client_payload[actor]=${GITHUB_ACTOR}"; then
-            echo "Dispatched build-combined to TorrentDrive/deploy for v${version} (${sha}, bump=${bump})."
-          else
-            echo "::warning::Failed to dispatch build-combined to TorrentDrive/deploy. Check DEPLOY_PAT permissions."
-          fi
 
           if gh api repos/TorrentDrive/website/dispatches \
             --method POST \
