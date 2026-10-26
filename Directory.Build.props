@@ -10,7 +10,7 @@
     CI stamps and updates <Version> automatically on every release to main.
   -->
   <PropertyGroup>
-    <Version>2.3.0</Version>
+    <Version>2.4.0</Version>
     <Product>TorrentDrive</Product>
     <Company>TorrentDrive</Company>
     <Authors>TorrentDrive Contributors</Authors>
